@@ -24,14 +24,28 @@ HabitatMQ is a mobile-first dashboard that puts real-time sensor data, animal pr
   <tr>
     <td align="center"><b>Care Log</b></td>
     <td align="center"><b>Inhabitants</b></td>
-    <td></td>
+    <td align="center"><b>Config</b></td>
   </tr>
   <tr>
     <td><img src="public/screenshots/care.png" width="220"/></td>
     <td><img src="public/screenshots/inhabitants.png" width="220"/></td>
-    <td></td>
+    <td><img src="public/screenshots/config.png" width="220"/></td>
   </tr>
 </table>
+
+---
+
+## Page Documentation
+
+| Page | Description |
+|------|-------------|
+| [Dashboard](docs/dashboard.md) | Live sensor gauges, device controls, Pi system stats |
+| [Sensor History](docs/history.md) | Time-series charts — 1H / 6H / 24H / 7D |
+| [Controls](docs/controls.md) | Device management — on/off/auto, solar schedule, PID |
+| [Care Log](docs/care.md) | Feeding, shedding, handling, weight log with calendar |
+| [Inhabitants](docs/inhabitants.md) | Animal profiles, weight tracking, growth percentile |
+| [Config](docs/config.md) | Sensors, MQTT, cameras, location, alert thresholds |
+| [Alerts](docs/alerts.md) | Threshold violation history and alert configuration |
 
 ---
 
@@ -84,20 +98,6 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The SQLite database is created automatically at `data/enclosure.db` on first run. No MQTT broker required for basic UI development.
-
----
-
-## Raspberry Pi Deployment
-
-HabitatMQ compiles on your Mac/PC, not on the Pi. The Pi never runs a build.
-
-**Workflow:**
-1. Build a `linux/arm64` Docker image locally
-2. Extract `.next/` and `node_modules/` (includes ARM64-compiled native modules)
-3. `rsync` build output to the Pi
-4. Restart the systemd service
-
-See your own `deploy.sh` for the full script. Builds take ~2 minutes on an M-series Mac.
 
 ---
 
