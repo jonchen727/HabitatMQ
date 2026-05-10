@@ -1,0 +1,65 @@
+# ─── Dependencies ────────────────────────────────────────────────────────────
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ─── Next.js ─────────────────────────────────────────────────────────────────
+/.next/
+/out/
+/build
+
+# ─── TypeScript ──────────────────────────────────────────────────────────────
+*.tsbuildinfo
+next-env.d.ts
+
+# ─── Environment & Secrets ───────────────────────────────────────────────────
+.env*
+*.pem
+
+# ─── Personal Data ───────────────────────────────────────────────────────────
+# SQLite DB — contains personal enclosure data, not for public repos
+/data/enclosure.db
+/data/*.db
+
+# Uploaded photos (runtime user content)
+/public/uploads/
+
+# ─── Deployment (Pi-specific — hostnames, SSH keys, local paths) ─────────────
+deploy.sh
+AGENTS.md
+CLAUDE.md
+DEPLOY.md
+
+# Pi hardware scripts
+/scripts/
+
+# ─── Generated / Dev Tooling ─────────────────────────────────────────────────
+eslint-report.json
+eslint_output.txt
+fix_eslint.py
+
+# ─── Local Backups ───────────────────────────────────────────────────────────
+.backup/
+
+# ─── OS / Editor ─────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# ─── Debug Logs ──────────────────────────────────────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ─── Vercel ──────────────────────────────────────────────────────────────────
+.vercel
+
+# ─── Testing ─────────────────────────────────────────────────────────────────
+/coverage
