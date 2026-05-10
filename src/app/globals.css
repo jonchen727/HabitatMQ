@@ -285,8 +285,11 @@ body > div:first-child { position: relative; z-index: 2; }
 .field-input,
 .input-field {
   width: 100%;
+  max-width: 100%;       /* Forces WebKit to obey grid boundaries */
   min-width: 0;          /* allow shrinking inside grid/flex cells */
   box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
   padding: 10px 14px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.06);
