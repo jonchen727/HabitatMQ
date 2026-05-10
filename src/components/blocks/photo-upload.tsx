@@ -1,69 +1,82 @@
+/**
+ * PhotoUpload — Multi-photo upload widget for care event forms.
+ *
+ * - Accepts multiple files at once via native picker or drag-and-drop
+ * - Shows existing photos as a grid of thumbnails with individual remove buttons
+ * - Always renders an "Add more" slot so new photos can be appended even in edit mode
+ */
+
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Camera, X, Loader2 } from "lucide-react";
+import { Camera, X, Loader2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
 
 interface PhotoUploadProps {
-  value?: string;          // current photo URL
-  onChange: (url: string | undefined) => void;
+  value?: string[];        // current photo URLs (multi)
+  onChange: (urls: string[]) => void;
   size?: "sm" | "md" | "lg";
   className?: string;
   label?: string;
 }
 
 export function PhotoUpload({
-  value,
+  value = [],
   onChange,
   size = "md",
   className,
-  label = "Photo",
+  label = "Photos",
 }: PhotoUploadProps) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const sizeClasses = {
-    sm: "w-16 h-16",
-    md: "w-24 h-24",
-    lg: "w-32 h-32",
-  };
+  const thumbSize = { sm: "w-16 h-16", md: "w-20 h-20", lg: "w-28 h-28" }[size];
 
-  const upload = useCallback(async (file: File) => {
-    setUploading(true);
+  const uploadFile = useCallback(async (file: File): Promise<string | null> => {
     try {
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/uploads", { method: "POST", body: fd });
       if (!res.ok) throw new Error("Upload failed");
       const { url } = await res.json();
-      onChange(url);
+      return url as string;
     } catch (err) {
       console.error("Photo upload failed:", err);
+      return null;
+    }
+  }, []);
+
+  const handleFiles = useCallback(async (files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    if (!images.length) return;
+    setUploading(true);
+    try {
+      const results = await Promise.all(images.map(uploadFile));
+      const newUrls = results.filter((u): u is string => u !== null);
+      if (newUrls.length) onChange([...value, ...newUrls]);
     } finally {
       setUploading(false);
     }
-  }, [onChange]);
+  }, [value, onChange, uploadFile]);
 
-  const handleFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) upload(file);
-    // Reset so the same file can be re-selected
+  const handleInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length) handleFiles(files);
     e.target.value = "";
-  }, [upload]);
+  }, [handleFiles]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith("image/")) upload(file);
-  }, [upload]);
+    handleFiles(Array.from(e.dataTransfer.files));
+  }, [handleFiles]);
 
-  const handleRemove = useCallback((e: React.MouseEvent) => {
+  const handleRemove = useCallback((idx: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    onChange(undefined);
-  }, [onChange]);
+    onChange(value.filter((_, i) => i !== idx));
+  }, [value, onChange]);
 
   return (
     <div className={cn("space-y-1.5", className)}>
@@ -73,58 +86,73 @@ export function PhotoUpload({
         </span>
       )}
 
-      <div
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-        className={cn(
-          "relative rounded-2xl overflow-hidden cursor-pointer transition-all border-2 border-dashed",
-          sizeClasses[size],
-          value
-            ? "border-transparent"
-            : dragOver
-              ? "border-emerald-400/40 bg-emerald-500/5"
-              : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12] hover:bg-white/[0.04]",
-        )}
-      >
-        {uploading ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-            <Loader2 className="w-5 h-5 text-white/60 animate-spin" />
-          </div>
-        ) : value ? (
-          <>
+      {/* Grid of existing photos + add-more slot */}
+      <div className="flex flex-wrap gap-2">
+        {/* Existing photo thumbnails */}
+        {value.map((url, idx) => (
+          <div
+            key={url}
+            className={cn("relative rounded-2xl overflow-hidden flex-shrink-0", thumbSize)}
+          >
             <Image
-              src={value}
-              alt="Uploaded photo"
+              src={url}
+              alt={`Photo ${idx + 1}`}
               fill
               className="object-cover"
-              sizes="128px"
+              sizes="112px"
             />
-            {/* Remove button */}
             <button
-              onClick={handleRemove}
+              type="button"
+              onClick={(e) => handleRemove(idx, e)}
               className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center
-                         hover:bg-red-500/60 transition-colors z-10"
+                         hover:bg-red-500/70 transition-colors z-10"
             >
               <X className="w-3 h-3 text-white" />
             </button>
-          </>
-        ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
-            <Camera className="w-4 h-4 text-white/20" />
-            <span className="text-[8px] text-white/15 font-medium">Add photo</span>
           </div>
-        )}
+        ))}
 
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-          onChange={handleFile}
-          className="hidden"
-        />
+        {/* Add-more / first-photo slot */}
+        <div
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          className={cn(
+            "relative rounded-2xl overflow-hidden cursor-pointer transition-all border-2 border-dashed flex-shrink-0",
+            thumbSize,
+            dragOver
+              ? "border-emerald-400/50 bg-emerald-500/10"
+              : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.18] hover:bg-white/[0.05]",
+          )}
+        >
+          {uploading ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Loader2 className="w-5 h-5 text-white/50 animate-spin" />
+            </div>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
+              {value.length === 0 ? (
+                <>
+                  <Camera className="w-4 h-4 text-white/20" />
+                  <span className="text-[8px] text-white/15 font-medium">Add photo</span>
+                </>
+              ) : (
+                <Plus className="w-5 h-5 text-white/25" />
+              )}
+            </div>
+          )}
+        </div>
       </div>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        multiple
+        onChange={handleInput}
+        className="hidden"
+      />
     </div>
   );
 }
@@ -142,7 +170,7 @@ export function PhotoThumb({
   className?: string;
   onClick?: () => void;
 }) {
-  const el = (
+  return (
     <div
       className={cn(
         "relative rounded-xl overflow-hidden flex-shrink-0 bg-white/[0.04]",
@@ -155,7 +183,6 @@ export function PhotoThumb({
       <Image src={src} alt="" fill className="object-cover" sizes={`${size}px`} />
     </div>
   );
-  return el;
 }
 
 /* ─── Full-screen Photo Lightbox ─────────────────────────────────────────── */

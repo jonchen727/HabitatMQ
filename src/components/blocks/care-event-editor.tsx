@@ -127,7 +127,7 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
   const [medDose, setMedDose] = useState("");
   const [medTarget, setMedTarget] = useState("");
   const [medNotes, setMedNotes] = useState("");
-  const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
+  const [photoUrls, setPhotoUrls] = useState<string[]>([]);
   // ─── Bedding Change Fields ─────────────────────────────────────────
   const [substrateType, setSubstrateType] = useState<SubstrateType>("aspen");
   const [depthInches, setDepthInches] = useState("");
@@ -148,7 +148,8 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
       setTime(initial.time ?? "");
       setType(initial.type as CareEventType);
       populateFields(initial);
-      setPhotoUrl(initial.photoUrl);
+      // Populate photos — use new photoUrls array, fall back to legacy photoUrl
+      setPhotoUrls(initial.photoUrls?.length ? initial.photoUrls : initial.photoUrl ? [initial.photoUrl] : []);
     } else {
       const d = new Date();
       const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -263,7 +264,7 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
     setRetainedPieces([]);
     setShedNotes("");
     setShedPhase("blue");
-    setPhotoUrl(undefined);
+    setPhotoUrls([]);
     // Bedding change
     setSubstrateType("aspen");
     setDepthInches("");
@@ -391,7 +392,8 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
       time: time || undefined,
       type,
       data: buildEventData(),
-      photoUrl,
+      photoUrls: photoUrls.length ? photoUrls : undefined,
+      photoUrl: photoUrls[0], // deprecated compat field
       createdAt: initial?.createdAt ?? new Date().toISOString(),
     });
     onClose();
@@ -1010,10 +1012,10 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
 
             {/* ── Photo Upload ── */}
             <PhotoUpload
-              value={photoUrl}
-              onChange={setPhotoUrl}
+              value={photoUrls}
+              onChange={setPhotoUrls}
               size="md"
-              label="Attach Photo"
+              label="Photos"
             />
 
           </div>

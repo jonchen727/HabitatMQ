@@ -518,16 +518,29 @@ export function listCareEvents(month?: string, type?: string, profileId?: string
     const rows = db.prepare(sql).all(...params) as {
       id: string; profile_id: string; date: string; time: string | null; type: string; data: string; photo_url: string | null; created_at: string;
     }[];
-    return rows.map((r) => ({
-      id: r.id,
-      profileId: r.profile_id,
-      date: r.date,
-      time: r.time ?? undefined,
-      type: r.type as CareEvent["type"],
-      data: JSON.parse(r.data),
-      photoUrl: r.photo_url ?? undefined,
-      createdAt: r.created_at,
-    }));
+    return rows.map((r) => {
+      // photo_url stores either a JSON array (multi-photo) or a legacy single URL string
+      let photoUrls: string[] | undefined;
+      if (r.photo_url) {
+        if (r.photo_url.startsWith("[")) {
+          try { photoUrls = JSON.parse(r.photo_url); } catch { photoUrls = [r.photo_url]; }
+        } else {
+          photoUrls = [r.photo_url]; // legacy single-photo backfill
+        }
+      }
+      return {
+        id: r.id,
+        profileId: r.profile_id,
+        date: r.date,
+        time: r.time ?? undefined,
+        type: r.type as CareEvent["type"],
+        data: JSON.parse(r.data),
+        photoUrls: photoUrls?.length ? photoUrls : undefined,
+        // Keep deprecated photoUrl populated for any consumers still using it
+        photoUrl: photoUrls?.[0],
+        createdAt: r.created_at,
+      };
+    });
   }
   finally { db.close(); }
 }
@@ -535,10 +548,15 @@ export function listCareEvents(month?: string, type?: string, profileId?: string
 export function saveCareEvent(event: CareEvent) {
   const db = getDb();
   try {
+    // Serialize photoUrls as JSON array into photo_url column
+    const urls = event.photoUrls?.length ? event.photoUrls
+      : event.photoUrl ? [event.photoUrl]
+      : null;
+    const photoUrlJson = urls ? JSON.stringify(urls) : null;
     db.prepare(
       `INSERT INTO care_events (id, profile_id, date, time, type, data, photo_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET profile_id = excluded.profile_id, date = excluded.date, time = excluded.time, type = excluded.type, data = excluded.data, photo_url = excluded.photo_url`
-    ).run(event.id, event.profileId, event.date, event.time ?? null, event.type, JSON.stringify(event.data), event.photoUrl ?? null, event.createdAt);
+    ).run(event.id, event.profileId, event.date, event.time ?? null, event.type, JSON.stringify(event.data), photoUrlJson, event.createdAt);
   }
   finally { db.close(); }
 }

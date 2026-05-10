@@ -603,7 +603,9 @@ export const CareEventSchema = z.object({
     MaintenanceDataSchema,
     MedicationDataSchema,
   ]),
+  /** @deprecated Use photoUrls. Kept for backward-compat with old records. */
   photoUrl: z.string().optional(),
+  photoUrls: z.array(z.string()).optional(),
   createdAt: z.string(),
 });
 export type CareEvent = z.infer<typeof CareEventSchema>;

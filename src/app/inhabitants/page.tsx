@@ -435,8 +435,8 @@ export default function InhabitantsPage() {
                 </div>
 
                 <PhotoUpload
-                  value={newForm.photoUrl}
-                  onChange={(url) => setNewForm((f) => ({ ...f, photoUrl: url }))}
+                  value={newForm.photoUrl ? [newForm.photoUrl] : []}
+                  onChange={(urls) => setNewForm((f) => ({ ...f, photoUrl: urls[0] ?? undefined }))}
                   size="sm"
                   label="Photo"
                 />

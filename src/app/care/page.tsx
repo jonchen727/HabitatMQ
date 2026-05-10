@@ -667,15 +667,27 @@ function EventCard({
         );
       })()}
 
-      {/* Photo thumbnail — tap to expand */}
-      {event.photoUrl && (
-        <PhotoThumb
-          src={event.photoUrl}
-          size={64}
-          className="rounded-xl"
-          onClick={() => onLightbox?.(event.photoUrl!)}
-        />
-      )}
+      {/* Photo thumbnails — tap to expand */}
+      {(() => {
+        const photos = event.photoUrls?.length ? event.photoUrls
+          : event.photoUrl ? [event.photoUrl]
+          : [];
+        if (!photos.length) return null;
+        return (
+          <div className="flex flex-row gap-1.5 flex-wrap">
+            {photos.map((url, i) => (
+              <PhotoThumb
+                key={url}
+                src={url}
+                size={64}
+                className="rounded-xl"
+                onClick={() => onLightbox?.(url)}
+                aria-label={`Photo ${i + 1}`}
+              />
+            ))}
+          </div>
+        );
+      })()}
     </motion.div>
   );
 }
