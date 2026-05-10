@@ -335,9 +335,8 @@ input[type="time"].field-input {
   color-scheme: dark;
   min-width: 0;
   width: 100%;
+  max-width: 100%;
   overflow: hidden;
-  /* iOS Safari zooms viewport when input font-size < 16px -> horizontal scroll.
-     16px prevents zoom; grid column constrains the visual size. */
   font-size: 16px;
 }
 
