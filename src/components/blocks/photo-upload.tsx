@@ -11,7 +11,9 @@
 import { useState, useRef, useCallback } from "react";
 import { Camera, X, Loader2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import Image from "next/image";
+// Using plain <img> instead of next/image — uploads are already compressed
+// to WebP by our pipeline, so next/image's on-demand optimization just adds
+// ~500ms latency per image on the Pi for zero benefit.
 
 interface PhotoUploadProps {
   value?: string[];        // current photo URLs (multi)
@@ -94,12 +96,12 @@ export function PhotoUpload({
             key={url}
             className={cn("relative rounded-2xl overflow-hidden flex-shrink-0", thumbSize)}
           >
-            <Image
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
               src={url}
               alt={`Photo ${idx + 1}`}
-              fill
-              className="object-cover"
-              sizes="112px"
+              className="w-full h-full object-cover"
+              loading="lazy"
             />
             <button
               type="button"
@@ -180,7 +182,8 @@ export function PhotoThumb({
       style={{ width: size, height: size }}
       onClick={onClick}
     >
-      <Image src={src} alt="" fill className="object-cover" sizes={`${size}px`} />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt="" className="w-full h-full object-cover" loading="lazy" />
     </div>
   );
 }
@@ -203,12 +206,11 @@ export function PhotoLightbox({ src, onClose }: { src: string; onClose: () => vo
         className="relative w-full max-w-lg mx-4 aspect-square rounded-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <Image
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
           src={src}
           alt=""
-          fill
-          className="object-contain"
-          sizes="(max-width: 768px) 100vw, 512px"
+          className="w-full h-full object-contain"
         />
       </div>
     </div>
