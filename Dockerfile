@@ -16,6 +16,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# ffmpeg + ffprobe for RTSP→MJPEG transcoding and camera probing
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Copy built app and node_modules
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules

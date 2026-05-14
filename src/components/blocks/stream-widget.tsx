@@ -23,6 +23,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { Video, VideoOff, X, Maximize2, WifiOff, Minimize2 } from "lucide-react";
 import type { PaneDef, StreamConfig } from "@/lib/schema";
+import { useDashboardStore } from "@/store/use-dashboard-store";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    HLS Player — Lazy-loads hls.js only when needed
@@ -242,7 +243,7 @@ function StreamFullscreen({
                   className="max-h-full rounded-2xl"
                   onError={() => setError(true)}
                 />
-              ) : config.protocol === "mjpeg" ? (
+              ) : config.protocol === "mjpeg" || config.protocol === "rtsp" ? (
                 <MjpegPlayer
                   paneId={paneId}
                   directUrl={config.url}
@@ -270,7 +271,22 @@ function StreamFullscreen({
    Stream Widget — Dashboard pane card content
    ═══════════════════════════════════════════════════════════════════════════ */
 export function StreamWidget({ pane }: { pane: PaneDef }) {
-  const config = pane.streamConfig;
+  // Resolve camera reference → StreamConfig (preferred over inline streamConfig)
+  const cameras = useDashboardStore((s) => s.cameras);
+  const config: StreamConfig | undefined = (() => {
+    if (pane.cameraId) {
+      const cam = cameras.find((c) => c.id === pane.cameraId);
+      if (cam) return {
+        url: cam.url,
+        protocol: cam.protocol,
+        label: cam.label,
+        refreshInterval: 5000,
+        username: cam.username,
+        password: cam.password,
+      };
+    }
+    return pane.streamConfig;
+  })();
   const label = pane.labelOverride ?? config?.label ?? "Camera";
   const [fullscreen, setFullscreen] = useState(false);
   const [error, setError] = useState(false);
@@ -332,7 +348,7 @@ export function StreamWidget({ pane }: { pane: PaneDef }) {
             </div>
           ) : config.protocol === "hls" ? (
             <HlsPlayer url={config.url} onError={handleError} />
-          ) : config.protocol === "mjpeg" ? (
+          ) : config.protocol === "mjpeg" || config.protocol === "rtsp" ? (
             <MjpegPlayer
               paneId={pane.id}
               directUrl={config.url}

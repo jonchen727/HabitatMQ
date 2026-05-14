@@ -249,7 +249,7 @@ export type ChartRange = z.infer<typeof ChartRangeSchema>;
 
 // ─── Stream Configuration (RTSP/HLS/MJPEG cameras) ──────────────────────────
 
-export const StreamProtocolSchema = z.enum(["hls", "mjpeg", "img"]);
+export const StreamProtocolSchema = z.enum(["hls", "mjpeg", "img", "rtsp"]);
 export type StreamProtocol = z.infer<typeof StreamProtocolSchema>;
 
 export const StreamConfigSchema = z.object({
@@ -257,6 +257,8 @@ export const StreamConfigSchema = z.object({
   protocol: StreamProtocolSchema.default("hls"),   // how to render
   refreshInterval: z.number().int().default(5000), // for img mode: ms between refreshes
   label: z.string().optional(),                    // camera name
+  username: z.string().optional(),                 // RTSP/camera auth — injected server-side, never sent to browser
+  password: z.string().optional(),                 // RTSP/camera auth — injected server-side, never sent to browser
 });
 export type StreamConfig = z.infer<typeof StreamConfigSchema>;
 
@@ -279,6 +281,9 @@ export const CameraDefSchema = z.object({
   url: z.string().default(""),                            // MJPEG source URL
   protocol: StreamProtocolSchema.default("mjpeg"),
   enabled: z.boolean().default(true),                     // start/stop detection
+  // Auth — stored server-side, stripped before sending to frontend
+  username: z.string().optional(),                        // RTSP/camera auth credential
+  password: z.string().optional(),                        // RTSP/camera auth credential
   // Detection settings — adjustable at runtime
   detectionFps: z.number().min(0.1).max(10).default(1),   // frames per second to process
   sensitivity: z.number().min(1).max(100).default(25),    // pixel diff threshold (lower = more sensitive)
@@ -300,6 +305,7 @@ export const PaneDefSchema = z.object({
   id: z.string().min(1),
   sensorId: z.string().optional(),       // optional — one of sensorId or controlId must be set
   controlId: z.string().optional(),      // link directly to a control
+  cameraId: z.string().optional(),       // link to a configured camera (preferred over inline streamConfig)
   displayType: DisplayTypeSchema,
   colSpan: z.union([z.literal(1), z.literal(2)]).default(1),
   colorTheme: ColorThemeSchema.default("neutral"),
@@ -309,7 +315,7 @@ export const PaneDefSchema = z.object({
   maxOverride: z.number().optional(),
   order: z.number().int().default(0),
   displayUnit: z.string().optional(),
-  streamConfig: StreamConfigSchema.optional(), // for stream panes only
+  streamConfig: StreamConfigSchema.optional(), // for stream panes only (legacy — prefer cameraId)
 });
 export type PaneDef = z.infer<typeof PaneDefSchema>;
 

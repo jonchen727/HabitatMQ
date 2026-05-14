@@ -7,11 +7,13 @@
  * Supports both sensor-backed and control-backed panes.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DISPLAY_TYPE_ICONS } from "@/components/blocks/widget-registry";
+import { Search, Loader2, Camera } from "lucide-react";
+import { useDashboardStore } from "@/store/use-dashboard-store";
 import type { SensorDef, ControlDef, PaneDef, DisplayType, ColorTheme, ChartRange, StreamProtocol } from "@/lib/schema";
 
 interface PaneEditorProps {
@@ -24,7 +26,7 @@ interface PaneEditorProps {
   onSave: (pane: PaneDef) => void;
 }
 
-type SourceType = "sensor" | "control" | "stream";
+type SourceType = "sensor" | "control" | "camera" | "stream";
 
 const DISPLAY_TYPES: DisplayType[] = ["gauge", "number", "chart", "bar", "switch", "stream"];
 const COLOR_THEMES: { value: ColorTheme; label: string; swatch: string }[] = [
@@ -38,10 +40,12 @@ const CHART_RANGES: ChartRange[] = ["1h", "6h", "24h", "7d", "30d"];
 
 export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, onSave }: PaneEditorProps) {
   const isEdit = !!pane;
+  const cameras = useDashboardStore((s) => s.cameras);
 
   const [sourceType, setSourceType] = useState<SourceType>("sensor");
   const [sensorId, setSensorId] = useState("");
   const [controlId, setControlId] = useState("");
+  const [cameraId, setCameraId] = useState("");
   const [displayType, setDisplayType] = useState<DisplayType>("gauge");
   const [colSpan, setColSpan] = useState<1 | 2>(1);
   const [colorTheme, setColorTheme] = useState<ColorTheme>("neutral");
@@ -50,15 +54,25 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
   const [streamUrl, setStreamUrl] = useState("");
   const [streamProtocol, setStreamProtocol] = useState<StreamProtocol>("mjpeg");
   const [streamRefreshInterval, setStreamRefreshInterval] = useState(5000);
+  const [streamUsername, setStreamUsername] = useState("");
+  const [streamPassword, setStreamPassword] = useState("");
+  const [streamIp, setStreamIp] = useState("");
+  const [probing, setProbing] = useState(false);
+  const [probeStatus, setProbeStatus] = useState<string>("");
 
   useEffect(() => {
     if (pane) {
       // Determine source type from existing pane
-      if (pane.displayType === "stream") {
+      if (pane.cameraId) {
+        setSourceType("camera");
+        setCameraId(pane.cameraId);
+      } else if (pane.displayType === "stream") {
         setSourceType("stream");
         setStreamUrl(pane.streamConfig?.url ?? "");
         setStreamProtocol(pane.streamConfig?.protocol ?? "mjpeg");
         setStreamRefreshInterval(pane.streamConfig?.refreshInterval ?? 5000);
+        setStreamUsername(pane.streamConfig?.username ?? "");
+        setStreamPassword(pane.streamConfig?.password ?? "");
       } else if (pane.controlId) {
         setSourceType("control");
         setControlId(pane.controlId);
@@ -85,8 +99,46 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
       setStreamUrl("");
       setStreamProtocol("mjpeg");
       setStreamRefreshInterval(5000);
+      setStreamUsername("");
+      setStreamPassword("");
+      setStreamIp("");
+      setProbeStatus("");
+      setCameraId("");
     }
-  }, [pane, open, sensors, controls]);
+  }, [pane, open, sensors, controls, cameras]);
+
+  const handleProbeStream = useCallback(async () => {
+    if (!streamIp.trim()) return;
+    setProbing(true);
+    setProbeStatus("Detecting...");
+    try {
+      const resp = await fetch("/api/streams/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ip: streamIp.trim(),
+          username: streamUsername || undefined,
+          password: streamPassword || undefined,
+        }),
+      });
+      const result = await resp.json();
+      if (result.success && result.streams.length > 0) {
+        const stream = result.streams[0];
+        setStreamUrl(stream.url);
+        setStreamProtocol("rtsp");
+        setProbeStatus(`✓ ${stream.codec.toUpperCase()} ${stream.width}×${stream.height} @ ${stream.fps}fps`);
+        if (!labelOverride.trim() && result.onvif?.model) {
+          setLabelOverride(`${result.onvif.manufacturer ?? ""} ${result.onvif.model}`.trim());
+        }
+      } else {
+        setProbeStatus("✗ No streams found — check IP and credentials");
+      }
+    } catch {
+      setProbeStatus("✗ Probe failed");
+    } finally {
+      setProbing(false);
+    }
+  }, [streamIp, streamUsername, streamPassword, labelOverride]);
 
   // When switching to "control" source, default to "switch" display
   const handleSourceChange = (st: SourceType) => {
@@ -94,6 +146,9 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
     if (st === "control") {
       setDisplayType("switch");
       if (!controlId && controls.length > 0) setControlId(controls[0].id);
+    } else if (st === "camera") {
+      setDisplayType("stream");
+      if (!cameraId && cameras.length > 0) setCameraId(cameras[0].id);
     } else if (st === "stream") {
       setDisplayType("stream");
     } else {
@@ -101,7 +156,7 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
     }
   };
 
-  const canSave = sourceType === "stream" ? true : sourceType === "sensor" ? !!sensorId : !!controlId;
+  const canSave = sourceType === "camera" ? !!cameraId : sourceType === "stream" ? true : sourceType === "sensor" ? !!sensorId : !!controlId;
 
   const handleSave = () => {
     const id = isEdit ? pane!.id : `pane-${Date.now()}`;
@@ -122,19 +177,23 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
 
     const def: PaneDef = {
       id,
-      ...(sourceType === "stream"
-        ? {
-            streamConfig: {
-              url: streamUrl,
-              protocol: streamProtocol,
-              refreshInterval: streamRefreshInterval,
-              label: labelOverride || undefined,
-            },
-          }
-        : sourceType === "sensor"
-          ? { sensorId }
-          : { controlId, ...(resolvedSensorId ? { sensorId: resolvedSensorId } : {}) }),
-      displayType: sourceType === "stream" ? "stream" as const : displayType,
+      ...(sourceType === "camera"
+        ? { cameraId }
+        : sourceType === "stream"
+          ? {
+              streamConfig: {
+                url: streamUrl,
+                protocol: streamProtocol,
+                refreshInterval: streamRefreshInterval,
+                label: labelOverride || undefined,
+                ...(streamUsername ? { username: streamUsername } : {}),
+                ...(streamPassword ? { password: streamPassword } : {}),
+              },
+            }
+          : sourceType === "sensor"
+            ? { sensorId }
+            : { controlId, ...(resolvedSensorId ? { sensorId: resolvedSensorId } : {}) }),
+      displayType: (sourceType === "stream" || sourceType === "camera") ? "stream" as const : displayType,
       colSpan,
       colorTheme,
       order: isEdit ? pane!.order : nextOrder,
@@ -173,11 +232,13 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
               )}>
                 Control
               </button>
-              <button onClick={() => handleSourceChange("stream")} className={cn(
+              <button onClick={() => handleSourceChange("camera")} className={cn(
                 "flex-1 py-1.5 rounded-lg text-[10px] font-semibold transition-all",
-                sourceType === "stream" ? "bg-white/[0.08] text-white/70" : "text-white/20"
+                sourceType === "camera" ? "bg-white/[0.08] text-white/70" : "text-white/20"
               )}>
-                Stream
+                <span className="flex items-center justify-center gap-1">
+                  <Camera className="w-3 h-3" /> Camera
+                </span>
               </button>
             </div>
           </div>
@@ -223,29 +284,138 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
                 ))}
               </select>
             </div>
-          ) : (
-            /* ── Stream Configuration ── */
+          ) : sourceType === "camera" ? (
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
-                  Camera URL
+                  Camera
+                </label>
+                {cameras.length === 0 ? (
+                  <p className="text-[10px] text-white/20 italic py-3">
+                    No cameras configured — go to <span className="text-white/40 font-semibold">Config → Cameras</span> to add one first.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {cameras.map((cam) => (
+                      <button
+                        key={cam.id}
+                        onClick={() => setCameraId(cam.id)}
+                        className={cn(
+                          "w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left",
+                          cameraId === cam.id
+                            ? "bg-white/[0.08] ring-1 ring-white/10"
+                            : "bg-white/[0.02] hover:bg-white/[0.05]"
+                        )}
+                      >
+                        <Camera className={cn(
+                          "w-5 h-5 shrink-0",
+                          cameraId === cam.id ? "text-cyan-400" : "text-white/15"
+                        )} />
+                        <div className="flex-1 min-w-0">
+                          <p className={cn(
+                            "text-[11px] font-semibold truncate",
+                            cameraId === cam.id ? "text-white/70" : "text-white/30"
+                          )}>
+                            {cam.label || cam.id}
+                          </p>
+                          <p className="text-[8px] text-white/15 truncate font-mono">
+                            {cam.protocol?.toUpperCase() ?? "MJPEG"} · {cam.url}
+                          </p>
+                        </div>
+                        {cameraId === cam.id && (
+                          <span className="text-[8px] font-bold text-cyan-400/60 uppercase tracking-wider">Selected</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : sourceType === "stream" ? (
+            /* ── Stream Configuration ── */
+            <div className="space-y-3">
+              {/* IP + Detect */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
+                  Camera IP Address
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    value={streamIp}
+                    onChange={(e) => setStreamIp(e.target.value)}
+                    placeholder="192.168.1.55"
+                    className="field-input flex-1"
+                    onKeyDown={(e) => e.key === "Enter" && handleProbeStream()}
+                  />
+                  <button
+                    onClick={handleProbeStream}
+                    disabled={probing || !streamIp.trim()}
+                    className={cn(
+                      "px-3 py-2 rounded-xl text-[10px] font-semibold transition-all flex items-center gap-1.5 shrink-0",
+                      probing
+                        ? "bg-cyan-500/10 text-cyan-400/50"
+                        : "bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 active:scale-95"
+                    )}
+                  >
+                    {probing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                    {probing ? "..." : "Detect"}
+                  </button>
+                </div>
+                {probeStatus && (
+                  <p className={cn(
+                    "text-[8px] font-semibold",
+                    probeStatus.startsWith("✓") ? "text-emerald-400/60" : probeStatus.startsWith("✗") ? "text-red-400/50" : "text-white/20"
+                  )}>
+                    {probeStatus}
+                  </p>
+                )}
+              </div>
+
+              {/* Credentials */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">Username</label>
+                  <input
+                    value={streamUsername}
+                    onChange={(e) => setStreamUsername(e.target.value)}
+                    placeholder="admin"
+                    autoComplete="off"
+                    className="field-input"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">Password</label>
+                  <input
+                    type="password"
+                    value={streamPassword}
+                    onChange={(e) => setStreamPassword(e.target.value)}
+                    placeholder="••••••••"
+                    autoComplete="off"
+                    className="field-input"
+                  />
+                </div>
+              </div>
+
+              {/* Stream URL (auto-filled or manual) */}
+              <div className="space-y-1.5">
+                <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
+                  Stream URL
                 </label>
                 <input
                   value={streamUrl}
                   onChange={(e) => setStreamUrl(e.target.value)}
-                  placeholder="http://192.168.1.x:8080/video"
-                  className="field-input"
+                  placeholder="rtsp://192.168.1.55:554/stream1"
+                  className="field-input font-mono text-[10px]"
                 />
-                <p className="text-[8px] text-white/15 leading-relaxed">
-                  Use <span className="text-white/25 font-semibold">SimpleIPCamera</span> (free iOS app) — copy the MJPEG URL it shows
-                </p>
               </div>
+
+              {/* Protocol */}
               <div className="space-y-1.5">
                 <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
                   Protocol
                 </label>
                 <div className="flex gap-1 p-1 rounded-xl bg-white/[0.03]">
-                  {(["hls", "mjpeg", "img"] as const).map((p) => (
+                  {(["rtsp", "mjpeg", "hls", "img"] as const).map((p) => (
                     <button key={p} onClick={() => setStreamProtocol(p)} className={cn(
                       "flex-1 py-1.5 rounded-lg text-[10px] font-semibold transition-all uppercase",
                       streamProtocol === p ? "bg-white/[0.08] text-white/70" : "text-white/20"
@@ -270,11 +440,14 @@ export function PaneEditor({ open, onClose, pane, sensors, controls, nextOrder, 
                   />
                 </div>
               )}
+              <p className="text-[8px] text-white/10">
+                Credentials injected server-side — never exposed to the browser
+              </p>
             </div>
-          )}
+          ) : null}
 
-          {/* Display Type Picker (hidden for stream) */}
-          {sourceType !== "stream" && (
+          {/* Display Type Picker (hidden for stream/camera) */}
+          {sourceType !== "stream" && sourceType !== "camera" && (
           <div className="space-y-1.5">
             <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
               Display Type
