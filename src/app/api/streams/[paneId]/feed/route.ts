@@ -81,14 +81,16 @@ function spawnRtspProxy(paneId: string, rtspUrl: string): ReadableStream {
   const ffmpeg = spawn("ffmpeg", [
     "-hide_banner",
     "-loglevel", "warning",
-    // Input: RTSP over TCP (more reliable than UDP for NAT'd cameras)
+    // Input: RTSP over TCP with generous timeout
     "-rtsp_transport", "tcp",
+    "-timeout", "10000000",        // 10s connection timeout (microseconds)
     "-i", rtspUrl,
-    // Transcode to MJPEG — low-latency settings
+    // Transcode to MJPEG — optimized for Pi ARM64
     "-an",                        // drop audio
     "-c:v", "mjpeg",              // MJPEG codec
-    "-q:v", "5",                  // quality (2=best, 31=worst) — 5 is sharp
-    "-r", "10",                   // cap at 10fps to save Pi CPU
+    "-q:v", "8",                  // quality (2=best, 31=worst) — 8 is good for Pi
+    "-r", "5",                    // cap at 5fps to save Pi CPU
+    "-vf", "scale=1280:-1",       // downscale to 1280px wide (saves decode/encode)
     "-f", "mpjpeg",               // multipart JPEG output
     "-boundary_tag", boundary,    // custom boundary for Content-Type header
     "pipe:1",                     // output to stdout

@@ -17,7 +17,7 @@
  * Click the pane to expand fullscreen with pinch-to-zoom.
  */
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -94,22 +94,69 @@ function MjpegPlayer({
   onError: () => void;
   onLoad?: () => void;
 }) {
-  // Use proxy URL so remote viewers can access the camera through the Pi
-  const src = directUrl
-    ? `/api/streams/${encodeURIComponent(paneId)}/feed?t=${Date.now()}`
-    : "";
+  const [connecting, setConnecting] = useState(true);
+  const [ready, setReady] = useState(false);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stable URL — must NOT change on re-render or the browser aborts the
+  // active multipart/x-mixed-replace stream and reconnects (killing ffmpeg)
+  const src = useMemo(
+    () => directUrl ? `/api/streams/${encodeURIComponent(paneId)}/feed` : "",
+    [directUrl, paneId]
+  );
+
+  // Clear timer on unmount
+  useEffect(() => {
+    return () => {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    };
+  }, []);
+
+  const handleLoad = useCallback(() => {
+    // First frame arrived — stream is live
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    setConnecting(false);
+    setReady(true);
+    onLoad?.();
+  }, [onLoad]);
+
+  const handleError = useCallback(() => {
+    if (ready) {
+      // Stream was working then failed — immediate error
+      onError();
+      return;
+    }
+    // During initial connection, delay error by 15s to allow ffmpeg warmup
+    if (!errorTimerRef.current) {
+      errorTimerRef.current = setTimeout(() => {
+        if (!ready) onError();
+      }, 15000);
+    }
+  }, [ready, onError]);
 
   if (!directUrl) return null;
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt="Camera feed"
-      onError={onError}
-      onLoad={onLoad}
-      className={cn("w-full h-full object-contain bg-black", className)}
-    />
+    <div className="relative w-full h-full">
+      {connecting && !ready && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 z-10">
+          <div className="w-4 h-4 border-2 border-white/10 border-t-cyan-400/50 rounded-full animate-spin" />
+          <p className="text-[8px] text-white/20 font-medium">Connecting to stream…</p>
+        </div>
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt="Camera feed"
+        onError={handleError}
+        onLoad={handleLoad}
+        className={cn(
+          "w-full h-full object-contain bg-black transition-opacity duration-500",
+          ready ? "opacity-100" : "opacity-0",
+          className
+        )}
+      />
+    </div>
   );
 }
 
