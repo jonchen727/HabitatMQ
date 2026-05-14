@@ -15,11 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { spawn, type ChildProcess } from "child_process";
-
-const DATA_DIR = path.join(process.cwd(), "data");
 
 // ── Track active ffmpeg processes for cleanup ────────────────────────────────
 const activeProcesses = new Map<string, ChildProcess>();
@@ -62,27 +58,9 @@ function buildAuthUrl(baseUrl: string, username?: string, password?: string): st
 
 async function getPaneConfig(paneId: string): Promise<PaneDef | null> {
   try {
-    const profilesDir = path.join(DATA_DIR, "profiles");
-    let profiles: string[] = [];
-    try {
-      profiles = await fs.readdir(profilesDir);
-    } catch {
-      const rootPanes = path.join(DATA_DIR, "panes.json");
-      const data = JSON.parse(await fs.readFile(rootPanes, "utf-8"));
-      return (data as PaneDef[]).find((p) => p.id === paneId) ?? null;
-    }
-
-    for (const profileDir of profiles) {
-      try {
-        const panesPath = path.join(profilesDir, profileDir, "panes.json");
-        const data = JSON.parse(await fs.readFile(panesPath, "utf-8"));
-        const pane = (data as PaneDef[]).find((p) => p.id === paneId);
-        if (pane) return pane;
-      } catch {
-        continue;
-      }
-    }
-    return null;
+    const { getPane } = await import("@/lib/db");
+    const pane = getPane(paneId);
+    return pane as PaneDef | null;
   } catch {
     return null;
   }
