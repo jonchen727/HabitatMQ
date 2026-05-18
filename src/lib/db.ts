@@ -570,6 +570,61 @@ export function deleteCareEvent(id: string): boolean {
   finally { db.close(); }
 }
 
+/** Get a single care event by ID */
+export function getCareEvent(id: string): CareEvent | null {
+  const db = getDb();
+  try {
+    const r = db.prepare(
+      "SELECT id, profile_id, date, time, type, data, photo_url, created_at FROM care_events WHERE id = ?"
+    ).get(id) as { id: string; profile_id: string; date: string; time: string | null; type: string; data: string; photo_url: string | null; created_at: string } | undefined;
+    if (!r) return null;
+    let photoUrls: string[] | undefined;
+    if (r.photo_url) {
+      if (r.photo_url.startsWith("[")) {
+        try { photoUrls = JSON.parse(r.photo_url); } catch { photoUrls = [r.photo_url]; }
+      } else {
+        photoUrls = [r.photo_url];
+      }
+    }
+    return {
+      id: r.id,
+      profileId: r.profile_id,
+      date: r.date,
+      time: r.time ?? undefined,
+      type: r.type as CareEvent["type"],
+      data: JSON.parse(r.data),
+      photoUrls: photoUrls?.length ? photoUrls : undefined,
+      photoUrl: photoUrls?.[0],
+      createdAt: r.created_at,
+    };
+  }
+  finally { db.close(); }
+}
+
+/** Get the most recent feeding event for a profile (for observation auto-linking) */
+export function getLastFeedingEvent(profileId: string): CareEvent | null {
+  const db = getDb();
+  try {
+    const r = db.prepare(
+      `SELECT id, profile_id, date, time, type, data, photo_url, created_at
+       FROM care_events WHERE profile_id = ? AND type = 'feeding'
+       ORDER BY date DESC, time DESC, created_at DESC LIMIT 1`
+    ).get(profileId) as { id: string; profile_id: string; date: string; time: string | null; type: string; data: string; photo_url: string | null; created_at: string } | undefined;
+    if (!r) return null;
+    return {
+      id: r.id,
+      profileId: r.profile_id,
+      date: r.date,
+      time: r.time ?? undefined,
+      type: r.type as CareEvent["type"],
+      data: JSON.parse(r.data),
+      photoUrl: undefined,
+      createdAt: r.created_at,
+    };
+  }
+  finally { db.close(); }
+}
+
 // ─── Inhabitant CRUD ─────────────────────────────────────────────────────────
 
 export function listInhabitants(profileId: string): Inhabitant[] {

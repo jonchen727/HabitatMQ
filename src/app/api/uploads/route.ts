@@ -12,7 +12,13 @@ import path from "path";
 import crypto from "crypto";
 import sharp from "sharp";
 
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
+// Persistent upload storage — MUST live outside the app directory so deploys don't wipe photos.
+// Production: defaults to ../enclosure-data/uploads (sibling of the app dir)
+// Dev: falls back to public/uploads for convenience
+const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ?? (process.env.NODE_ENV === "production"
+    ? path.join(process.cwd(), "..", "enclosure-data", "uploads")
+    : path.join(process.cwd(), "public", "uploads"));
 
 const MAX_DIMENSION = 1600; // px — long edge cap
 const WEBP_QUALITY = 80;   // good visual quality, ~10-20x smaller than HEIC

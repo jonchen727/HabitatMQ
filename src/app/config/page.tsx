@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { useDashboardStore } from "@/store/use-dashboard-store";
 import { useProfileStore } from "@/store/use-profile-store";
@@ -21,7 +22,7 @@ import { ZoneEditor } from "@/components/blocks/zone-editor";
 import { DISPLAY_TYPE_ICONS } from "@/components/blocks/widget-registry";
 import { cn } from "@/lib/utils";
 import {
-  Plus, Pencil, Trash2, Radio, LayoutGrid, Wifi, Camera,
+  Plus, Pencil, Trash2, Radio, LayoutGrid, Wifi, Camera, FileText,
   ChevronRight, ChevronUp, ChevronDown, Thermometer, ToggleLeft, Zap, MapPin,
 } from "lucide-react";
 import type { SensorDef, PaneDef, ControlDef, Location, CameraDef } from "@/lib/schema";
@@ -531,6 +532,25 @@ export default function ConfigPage() {
         onSave={handleSaveZones}
         onClose={() => { setZoneEditorOpen(false); setZoneEditCamera(null); }}
       />
+
+      {/* ── About Footer ─────────────────────────────────────── */}
+      <motion.div variants={item} className="mt-6 pt-4 border-t border-white/[0.03]">
+        <Link
+          href="/changelog"
+          className="glass rounded-2xl p-4 flex items-center justify-between hover:bg-white/[0.04] transition-colors touch-card"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-400/10 flex items-center justify-center">
+              <FileText className="w-4 h-4 text-emerald-400/60" />
+            </div>
+            <div>
+              <p className="text-[12px] font-semibold text-white/60">Changelog</p>
+              <p className="text-[9px] text-white/20">See what&apos;s new in HabitatMQ</p>
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-white/15" />
+        </Link>
+      </motion.div>
     </motion.div>
   );
 }

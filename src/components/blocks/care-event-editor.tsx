@@ -21,14 +21,24 @@ import type {
   AquariumFeedingData, AquariumFoodType,
   WaterChangeData, WaterTestData, AdditionData, LossData, MaintenanceData, MedicationData,
   BeddingChangeData, CleaningData, SubstrateType, CleaningScope,
+  ObservationCategory, LumpStatus, FeedingObservationData, BehaviorObservationData, MedicalObservationData,
 } from "@/lib/schema";
 import type { InhabitantCategory } from "@/lib/schema";
+
+interface FeedingRecommendation {
+  preyLabel: string;
+  preyWeightRange: { min: number; max: number } | null;
+  percentOfBodyWeight: string | null;
+  sizeUpTip: string;
+  sizeDownTip: string;
+}
 
 interface CareEventEditorProps {
   open: boolean;
   initial?: CareEvent | null;
   defaultDate?: string;
   profileType?: EnclosureType;
+  feedingRecommendation?: FeedingRecommendation | null;
   onSave: (event: CareEvent) => void;
   onClose: () => void;
 }
@@ -38,6 +48,7 @@ const REPTILE_EVENT_TYPES: { key: CareEventType; label: string; color: string }[
   { key: "handling", label: "Handling", color: "text-blue-400" },
   { key: "measurement", label: "Measure", color: "text-emerald-400" },
   { key: "shedding", label: "Shedding", color: "text-purple-400" },
+  { key: "observation", label: "Observe", color: "text-cyan-400" },
   { key: "bedding_change", label: "Bedding", color: "text-orange-400" },
   { key: "cleaning", label: "Clean", color: "text-slate-400" },
 ];
@@ -61,8 +72,19 @@ const MAINTENANCE_TASKS = ["filter_clean", "water_top_off", "equipment_swap", "p
 const LOSS_CAUSES = ["disease", "old_age", "aggression", "water_quality", "jumping", "unknown", "other"] as const;
 const SUBSTRATE_TYPES: SubstrateType[] = ["aspen", "coconut_fiber", "cypress_mulch", "paper_towel", "reptile_carpet", "bioactive_mix", "topsoil_sand_mix", "other"];
 const CLEANING_SCOPES: CleaningScope[] = ["spot", "partial", "full"];
+const OBS_CATEGORIES: { key: ObservationCategory; label: string }[] = [
+  { key: "feeding", label: "Feeding" },
+  { key: "behavior", label: "Behavior" },
+  { key: "medical", label: "Medical" },
+];
+const LUMP_STATUSES: { key: LumpStatus; label: string; color: string }[] = [
+  { key: "no_lump", label: "No Lump", color: "text-emerald-400" },
+  { key: "lump_visible", label: "Lump Visible", color: "text-amber-400" },
+  { key: "regurgitation", label: "Regurgitation", color: "text-red-400" },
+];
+const OBS_TEMPERAMENTS: Temperament[] = ["calm", "curious", "nervous", "defensive", "nippy", "other"];
 
-export function CareEventEditor({ open, initial, defaultDate, profileType = "reptile", onSave, onClose }: CareEventEditorProps) {
+export function CareEventEditor({ open, initial, defaultDate, profileType = "reptile", feedingRecommendation, onSave, onClose }: CareEventEditorProps) {
   const EVENT_TYPES = profileType === "aquarium" ? AQUARIUM_EVENT_TYPES : REPTILE_EVENT_TYPES;
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
@@ -139,6 +161,35 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
   const [disinfectant, setDisinfectant] = useState("");
   const [waterBowlCleaned, setWaterBowlCleaned] = useState(false);
   const [cleaningNotes, setCleaningNotes] = useState("");
+
+  // ─── Observation Fields ──────────────────────────────────────────
+  const [obsCategory, setObsCategory] = useState<ObservationCategory>("feeding");
+  const [lumpStatus, setLumpStatus] = useState<LumpStatus>("no_lump");
+  const [linkedFeeding, setLinkedFeeding] = useState<CareEvent | null>(null);
+  const [hoursSinceFeeding, setHoursSinceFeeding] = useState<number>(0);
+  const [obsTemperament, setObsTemperament] = useState<Temperament>("calm");
+  const [obsActivity, setObsActivity] = useState("");
+  const [obsLocation, setObsLocation] = useState("");
+  const [obsNotes, setObsNotes] = useState("");
+
+  // Auto-fetch last feeding when observation type is selected
+  useEffect(() => {
+    if (type === "observation" && obsCategory === "feeding" && !initial) {
+      fetch("/api/care/last-feeding")
+        .then(r => r.json())
+        .then((ev: CareEvent | null) => {
+          if (ev) {
+            setLinkedFeeding(ev);
+            // Calculate hours since feeding
+            const feedDate = new Date(`${ev.date}T${ev.time || "12:00"}`);
+            const now = new Date();
+            const diffMs = now.getTime() - feedDate.getTime();
+            setHoursSinceFeeding(Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10);
+          }
+        })
+        .catch(() => { /* no feeding found */ });
+    }
+  }, [type, obsCategory, initial]);
 
   useEffect(() => {
     // Always reset first to prevent stale field cross-contamination
@@ -242,6 +293,26 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
       setDisinfectant(cl.disinfectant ?? "");
       setWaterBowlCleaned(cl.waterBowlCleaned);
       setCleaningNotes(cl.notes ?? "");
+    } else if (event.type === "observation" && "category" in d) {
+      const obs = d as FeedingObservationData | BehaviorObservationData | MedicalObservationData;
+      setObsCategory(obs.category);
+      setObsNotes(obs.notes ?? "");
+      if (obs.category === "feeding") {
+        const fo = obs as FeedingObservationData;
+        setLumpStatus(fo.lumpStatus);
+        setHoursSinceFeeding(fo.hoursSinceFeeding);
+        if (fo.linkedFeedingId) {
+          fetch(`/api/care/events/${fo.linkedFeedingId}`)
+            .then(r => r.json())
+            .then((ev: CareEvent | null) => { if (ev) setLinkedFeeding(ev); })
+            .catch(() => {});
+        }
+      } else if (obs.category === "behavior") {
+        const bo = obs as BehaviorObservationData;
+        setObsTemperament(bo.temperament ?? "calm");
+        setObsActivity(bo.activity ?? "");
+        setObsLocation(bo.location ?? "");
+      }
     }
   }
 
@@ -276,6 +347,15 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
     setDisinfectant("");
     setWaterBowlCleaned(false);
     setCleaningNotes("");
+    // Observation
+    setObsCategory("feeding");
+    setLumpStatus("no_lump");
+    setLinkedFeeding(null);
+    setHoursSinceFeeding(0);
+    setObsTemperament("calm");
+    setObsActivity("");
+    setObsLocation("");
+    setObsNotes("");
   }
 
   function buildEventData(): CareEvent["data"] {
@@ -378,6 +458,33 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
           waterBowlCleaned,
           notes: cleaningNotes || undefined,
         } satisfies CleaningData;
+      case "observation":
+        switch (obsCategory) {
+          case "feeding":
+            return {
+              category: "feeding" as const,
+              linkedFeedingId: linkedFeeding?.id ?? "",
+              linkedFeedingDate: linkedFeeding?.date ?? "",
+              lumpStatus,
+              hoursSinceFeeding,
+              notes: obsNotes || undefined,
+            } satisfies FeedingObservationData;
+          case "behavior":
+            return {
+              category: "behavior" as const,
+              temperament: obsTemperament,
+              activity: obsActivity || undefined,
+              location: obsLocation || undefined,
+              notes: obsNotes || undefined,
+            } satisfies BehaviorObservationData;
+          case "medical":
+            return {
+              category: "medical" as const,
+              notes: obsNotes || undefined,
+            } satisfies MedicalObservationData;
+        }
+        // fallthrough (should never reach)
+        return { category: "medical" as const, notes: obsNotes || undefined } satisfies MedicalObservationData;
       default:
         return { preyType: "other", accepted: false } satisfies FeedingData;
     }
@@ -500,6 +607,29 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
                     onChange={(e) => setPreyWeight(e.target.value)}
                     placeholder="3.5" className="input-field" />
                 </Field>
+                {/* Contextual size guidance — only visible while editing */}
+                {feedingRecommendation?.preyWeightRange && (
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.04] p-3 space-y-1.5">
+                    <p className="text-[9px] font-semibold text-white/30 uppercase tracking-wider">Prey Sizing Guide</p>
+                    <p className="text-[10px] text-white/40">
+                      Recommended: <span className="text-white/60 capitalize font-medium">{feedingRecommendation.preyLabel}</span>
+                      <span className="text-white/30"> · {feedingRecommendation.preyWeightRange.min}–{feedingRecommendation.preyWeightRange.max}g</span>
+                      {feedingRecommendation.percentOfBodyWeight && (
+                        <span className="text-white/20"> ({feedingRecommendation.percentOfBodyWeight} BW)</span>
+                      )}
+                    </p>
+                    {preyWeight && parseFloat(preyWeight) < feedingRecommendation.preyWeightRange.min && (
+                      <p className="text-[9px] text-emerald-300/60">
+                        💡 <span className="font-semibold">Consider sizing up:</span> {feedingRecommendation.sizeUpTip}
+                      </p>
+                    )}
+                    {preyWeight && parseFloat(preyWeight) > feedingRecommendation.preyWeightRange.max && (
+                      <p className="text-[9px] text-amber-300/60">
+                        ⚠️ <span className="font-semibold">Consider sizing down:</span> {feedingRecommendation.sizeDownTip}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <Field label="Accepted?">
                   <div className="flex gap-2">
                     <button onClick={() => setAccepted(true)}
@@ -1006,6 +1136,110 @@ export function CareEventEditor({ open, initial, defaultDate, profileType = "rep
                 <Field label="Notes">
                   <textarea value={cleaningNotes} onChange={(e) => setCleaningNotes(e.target.value)}
                     rows={2} placeholder="Removed poop from warm side, spot cleaned urates…" className="input-field resize-none" />
+                </Field>
+              </div>
+            )}
+
+            {/* ── Observation ─────────────────────────────────── */}
+            {type === "observation" && (
+              <div className="space-y-3">
+                {/* Sub-category selector */}
+                <Field label="Category">
+                  <div className="flex gap-2">
+                    {OBS_CATEGORIES.map((c) => (
+                      <button key={c.key} onClick={() => setObsCategory(c.key)}
+                        className={cn(
+                          "flex-1 py-2 rounded-xl text-[11px] font-semibold transition-all",
+                          obsCategory === c.key
+                            ? "bg-cyan-500/20 text-cyan-400 border border-cyan-400/20"
+                            : "bg-white/[0.04] text-white/20 border border-white/[0.04]"
+                        )}>
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+
+                {/* ── Feeding Observation ── */}
+                {obsCategory === "feeding" && (
+                  <div className="space-y-3">
+                    {/* Linked feeding summary */}
+                    {linkedFeeding ? (
+                      <div className="rounded-xl bg-amber-500/[0.06] border border-amber-400/10 p-3">
+                        <p className="text-[10px] text-amber-400/60 uppercase tracking-wider mb-1">Linked Feeding</p>
+                        <p className="text-[12px] text-white/60">
+                          {linkedFeeding.date}{linkedFeeding.time ? ` at ${linkedFeeding.time}` : ""}
+                          {" · "}
+                          <span className="capitalize">
+                            {"preyType" in linkedFeeding.data
+                              ? `${(linkedFeeding.data as FeedingData).preyType}${(linkedFeeding.data as FeedingData).preyWeightGrams ? ` · ${(linkedFeeding.data as FeedingData).preyWeightGrams}g` : ""}`
+                              : "feeding"}
+                          </span>
+                        </p>
+                        <p className="text-[11px] text-cyan-400 font-semibold mt-1">
+                          ⏱ {hoursSinceFeeding}h since feeding
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl bg-white/[0.04] border border-white/[0.04] p-3">
+                        <p className="text-[10px] text-white/30">No feeding events found to link</p>
+                      </div>
+                    )}
+
+                    {/* Lump status */}
+                    <Field label="Digestion Status">
+                      <div className="flex gap-2">
+                        {LUMP_STATUSES.map((s) => (
+                          <button key={s.key} onClick={() => setLumpStatus(s.key)}
+                            className={cn(
+                              "flex-1 py-2 rounded-xl text-[11px] font-semibold transition-all",
+                              lumpStatus === s.key
+                                ? s.key === "no_lump" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-400/20"
+                                : s.key === "lump_visible" ? "bg-amber-500/20 text-amber-400 border border-amber-400/20"
+                                : "bg-red-500/20 text-red-400 border border-red-400/20"
+                                : "bg-white/[0.04] text-white/20 border border-white/[0.04]"
+                            )}>
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    </Field>
+                  </div>
+                )}
+
+                {/* ── Behavior Observation ── */}
+                {obsCategory === "behavior" && (
+                  <div className="space-y-3">
+                    <Field label="Temperament">
+                      <div className="flex flex-wrap gap-1.5">
+                        {OBS_TEMPERAMENTS.map((t) => (
+                          <button key={t} onClick={() => setObsTemperament(t)}
+                            className={cn(
+                              "px-3 py-1.5 rounded-lg text-[11px] font-medium capitalize transition-all",
+                              obsTemperament === t
+                                ? "bg-blue-500/20 text-blue-400 border border-blue-400/20"
+                                : "bg-white/[0.04] text-white/20 border border-white/[0.04]"
+                            )}>
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    </Field>
+                    <Field label="Activity">
+                      <input value={obsActivity} onChange={(e) => setObsActivity(e.target.value)}
+                        placeholder="Exploring, hiding, soaking, basking…" className="input-field" />
+                    </Field>
+                    <Field label="Location">
+                      <input value={obsLocation} onChange={(e) => setObsLocation(e.target.value)}
+                        placeholder="Warm hide, cool side, water bowl…" className="input-field" />
+                    </Field>
+                  </div>
+                )}
+
+                {/* Notes (shared across all observation categories) */}
+                <Field label="Notes">
+                  <textarea value={obsNotes} onChange={(e) => setObsNotes(e.target.value)}
+                    rows={2} placeholder="Additional observations…" className="input-field resize-none" />
                 </Field>
               </div>
             )}

@@ -275,16 +275,30 @@ export type ZoneDef = z.infer<typeof ZoneDefSchema>;
 export const DetectionModeSchema = z.enum(["reptile", "aquarium", "general"]);
 export type DetectionMode = z.infer<typeof DetectionModeSchema>;
 
+// ─── ONVIF Motion Detection via PullMessages ─────────────────────────────────
+
+export const OnvifMotionConfigSchema = z.object({
+  enabled: z.boolean().default(false),               // subscribe to ONVIF PullMessages
+  mqttTopic: z.string().default(""),                  // publish to e.g. "enclosure/camera/motion"
+  cooldownSeconds: z.number().min(0).max(300).default(30), // debounce rapid events
+});
+export type OnvifMotionConfig = z.infer<typeof OnvifMotionConfigSchema>;
+
 export const CameraDefSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),                              // "Enclosure Cam 1"
-  url: z.string().default(""),                            // MJPEG source URL
+  url: z.string().default(""),                            // RTSP/MJPEG source URL
   protocol: StreamProtocolSchema.default("mjpeg"),
   enabled: z.boolean().default(true),                     // start/stop detection
   // Auth — stored server-side, stripped before sending to frontend
   username: z.string().optional(),                        // RTSP/camera auth credential
   password: z.string().optional(),                        // RTSP/camera auth credential
-  // Detection settings — adjustable at runtime
+  // ── ONVIF configuration ──
+  useOnvif: z.boolean().default(false),                   // register with go2rtc using onvif:// URL
+  onvifPort: z.number().int().default(2020),              // ONVIF service port
+  onvifProfile: z.string().optional(),                    // selected ONVIF profile token
+  motionDetection: OnvifMotionConfigSchema.default(() => ({ enabled: false, mqttTopic: "", cooldownSeconds: 30 })),   // ONVIF event-based motion detection
+  // Detection settings — adjustable at runtime (OpenCV fallback)
   detectionFps: z.number().min(0.1).max(10).default(1),   // frames per second to process
   sensitivity: z.number().min(1).max(100).default(25),    // pixel diff threshold (lower = more sensitive)
   minMotionArea: z.number().min(10).max(50000).default(500), // min changed pixels to count as motion
@@ -397,7 +411,7 @@ export type Inhabitant = z.infer<typeof InhabitantSchema>;
 export const CareEventTypeSchema = z.enum([
   // Reptile
   "feeding", "handling", "measurement", "shedding", "schedule",
-  "bedding_change", "cleaning",
+  "bedding_change", "cleaning", "observation",
   // Aquarium
   "water_change", "water_test", "addition", "loss", "maintenance", "medication",
 ]);
@@ -405,7 +419,7 @@ export type CareEventType = z.infer<typeof CareEventTypeSchema>;
 
 // Reptile care event types
 export const REPTILE_CARE_TYPES: CareEventType[] = [
-  "feeding", "handling", "measurement", "shedding", "bedding_change", "cleaning",
+  "feeding", "handling", "measurement", "shedding", "bedding_change", "cleaning", "observation",
 ];
 
 // Aquarium care event types
@@ -583,6 +597,46 @@ export const CleaningDataSchema = z.object({
 });
 export type CleaningData = z.infer<typeof CleaningDataSchema>;
 
+// ─── Observation Data Shapes ─────────────────────────────────────────────────
+
+export const ObservationCategorySchema = z.enum(["feeding", "behavior", "medical"]);
+export type ObservationCategory = z.infer<typeof ObservationCategorySchema>;
+
+export const LumpStatusSchema = z.enum(["no_lump", "lump_visible", "regurgitation"]);
+export type LumpStatus = z.infer<typeof LumpStatusSchema>;
+
+export const FeedingObservationDataSchema = z.object({
+  category: z.literal("feeding"),
+  linkedFeedingId: z.string(),
+  linkedFeedingDate: z.string(),
+  lumpStatus: LumpStatusSchema,
+  hoursSinceFeeding: z.number(),
+  notes: z.string().optional(),
+});
+export type FeedingObservationData = z.infer<typeof FeedingObservationDataSchema>;
+
+export const BehaviorObservationDataSchema = z.object({
+  category: z.literal("behavior"),
+  temperament: TemperamentSchema.optional(),
+  activity: z.string().optional(),
+  location: z.string().optional(),
+  notes: z.string().optional(),
+});
+export type BehaviorObservationData = z.infer<typeof BehaviorObservationDataSchema>;
+
+export const MedicalObservationDataSchema = z.object({
+  category: z.literal("medical"),
+  notes: z.string().optional(),
+});
+export type MedicalObservationData = z.infer<typeof MedicalObservationDataSchema>;
+
+export const ObservationDataSchema = z.discriminatedUnion("category", [
+  FeedingObservationDataSchema,
+  BehaviorObservationDataSchema,
+  MedicalObservationDataSchema,
+]);
+export type ObservationData = z.infer<typeof ObservationDataSchema>;
+
 // ─── Unified Care Event ──────────────────────────────────────────────────────
 
 export const CareEventSchema = z.object({
@@ -608,6 +662,8 @@ export const CareEventSchema = z.object({
     LossDataSchema,
     MaintenanceDataSchema,
     MedicationDataSchema,
+    // Observation (reptile)
+    ObservationDataSchema,
   ]),
   /** @deprecated Use photoUrls. Kept for backward-compat with old records. */
   photoUrl: z.string().optional(),

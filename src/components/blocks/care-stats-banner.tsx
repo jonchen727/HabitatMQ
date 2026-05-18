@@ -46,6 +46,11 @@ interface CareStatsData {
       avgIntervalDays: number | null;
       refusalStreak: number;
     };
+    digestion: {
+      lumpStatus: string;
+      hoursSinceFeeding: number;
+      observedAt: string;
+    } | null;
   };
   handling: {
     thisWeek: { sessions: number; totalMinutes: number; avgMinutesPerSession: number };
@@ -149,6 +154,26 @@ export function CareStatsBanner() {
             }
             active={expanded === "feed"}
             onClick={() => toggleExpand("feed")}
+          />
+        )}
+
+        {/* ── Digestion Chip ── */}
+        {feed?.digestion && (
+          <StatChip
+            label="🔍 Digest"
+            value={
+              feed.digestion.lumpStatus === "no_lump" ? "✓ No lump"
+              : feed.digestion.lumpStatus === "lump_visible" ? "⚠ Lump"
+              : "🚨 Regurg"
+            }
+            sub={`${Math.round(feed.digestion.hoursSinceFeeding)}h post-feed`}
+            color={
+              feed.digestion.lumpStatus === "no_lump" ? "text-emerald-400"
+              : feed.digestion.lumpStatus === "lump_visible" ? "text-amber-400"
+              : "text-red-400"
+            }
+            active={expanded === "digest"}
+            onClick={() => toggleExpand("digest")}
           />
         )}
 
@@ -326,16 +351,7 @@ function FeedDetail({
           </p>
         </div>
       )}
-      {rec?.sizeUpTip && (
-        <div className="text-[10px] text-emerald-300/60 bg-emerald-500/5 p-2 rounded-lg">
-          💡 <span className="font-semibold">Size up:</span> {rec.sizeUpTip}
-        </div>
-      )}
-      {rec?.sizeDownTip && (
-        <div className="text-[10px] text-amber-300/60 bg-amber-500/5 p-2 rounded-lg">
-          ⚠️ <span className="font-semibold">Size down:</span> {rec.sizeDownTip}
-        </div>
-      )}
+      {/* Size up/down tips moved to care-event-editor — only shown when editing a feeding */}
       <div className="flex gap-3">
         {hist.acceptanceRate !== null && (
           <MiniStat label="Accept %" value={`${hist.acceptanceRate}%`} />

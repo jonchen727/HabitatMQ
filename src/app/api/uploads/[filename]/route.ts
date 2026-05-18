@@ -8,7 +8,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "fs/promises";
 import path from "path";
 
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
+// Must match the path in ../route.ts — persistent storage outside the app directory
+const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ?? (process.env.NODE_ENV === "production"
+    ? path.join(process.cwd(), "..", "enclosure-data", "uploads")
+    : path.join(process.cwd(), "public", "uploads"));
 
 const MIME_TYPES: Record<string, string> = {
   jpg: "image/jpeg",

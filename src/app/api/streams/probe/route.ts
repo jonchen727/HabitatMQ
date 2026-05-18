@@ -33,6 +33,8 @@ interface DetectedStream {
   height: number;
   fps: number;
   source: "rtsp" | "onvif";
+  /** ONVIF profile token — used for go2rtc onvif:// registration */
+  profileToken?: string;
 }
 
 interface OnvifInfo {
@@ -42,6 +44,8 @@ interface OnvifInfo {
   /** Status of the ONVIF probe for UI feedback */
   status: "ok" | "auth_failed" | "unreachable" | "error";
   statusMessage?: string;
+  /** Whether the camera supports ONVIF Event Service (motion detection) */
+  supportsEvents?: boolean;
 }
 
 // ── RTSP Probing via ffprobe ─────────────────────────────────────────────────
@@ -257,6 +261,7 @@ async function probeOnvif(
             height: parseInt(heights[i]) || 0,
             fps: 0,
             source: "onvif",
+            profileToken: token,
           });
         }
       } catch {
@@ -281,6 +286,28 @@ async function probeOnvif(
       if (models.length) result.info!.model = models[0];
     } catch {
       // Device info is optional
+    }
+
+    // Step 4: Probe Event Service — check if camera supports motion events
+    try {
+      const eventUrl = `http://${ip}:${port}/onvif/event_service`;
+      const eventXml = await soapRequest(
+        eventUrl,
+        "http://www.onvif.org/ver10/events/wsdl/GetEventProperties",
+        `<GetEventProperties xmlns="http://www.onvif.org/ver10/events/wsdl"/>`,
+        username,
+        password,
+        3000,
+      );
+      // If we get any response with topics, events are supported
+      const hasMotionTopic = eventXml.includes("CellMotionDetector") || eventXml.includes("MotionAlarm") || eventXml.includes("Motion");
+      result.info!.supportsEvents = hasMotionTopic;
+      if (!hasMotionTopic) {
+        // Events endpoint exists but no motion topics
+        result.info!.supportsEvents = eventXml.includes("TopicSet");
+      }
+    } catch {
+      result.info!.supportsEvents = false;
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

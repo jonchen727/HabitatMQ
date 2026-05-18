@@ -10,6 +10,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listCameras, getCamera, saveCamera, deleteCamera, getActiveProfileId } from "@/lib/db";
 import { CameraDefSchema } from "@/lib/schema";
+import { registerStream, unregisterStream } from "@/lib/go2rtc";
+import { startMotionListener, stopMotionListener } from "@/lib/onvif-events";
+
+/** Register camera with go2rtc (ONVIF or RTSP mode) */
+async function syncCameraStream(camera: ReturnType<typeof CameraDefSchema.parse>) {
+  const shouldRegister = camera.enabled && (camera.url || camera.useOnvif) && (camera.protocol === "rtsp" || camera.useOnvif);
+
+  if (shouldRegister) {
+    registerStream({
+      cameraId: camera.id,
+      url: camera.url,
+      username: camera.username,
+      password: camera.password,
+      useOnvif: camera.useOnvif,
+      onvifPort: camera.onvifPort,
+      onvifProfile: camera.onvifProfile,
+    }).catch(() => {});
+  } else {
+    unregisterStream(camera.id).catch(() => {});
+  }
+}
+
+/** Start or stop ONVIF motion event listener */
+function syncMotionListener(camera: ReturnType<typeof CameraDefSchema.parse>) {
+  if (camera.enabled && camera.motionDetection?.enabled) {
+    startMotionListener(camera).catch(() => {});
+  } else {
+    stopMotionListener(camera.id);
+  }
+}
 
 export async function GET(req: NextRequest) {
   const profileId = req.nextUrl.searchParams.get("profileId") ?? getActiveProfileId();
@@ -27,6 +57,11 @@ export async function POST(req: NextRequest) {
 
     const profileId = body.profileId ?? getActiveProfileId();
     saveCamera(camera, profileId);
+
+    // Register with go2rtc + start motion listener
+    await syncCameraStream(camera);
+    syncMotionListener(camera);
+
     return NextResponse.json(camera, { status: 201 });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 400 });
@@ -43,6 +78,11 @@ export async function PUT(req: NextRequest) {
 
     const profileId = body.profileId ?? getActiveProfileId();
     saveCamera(camera, profileId);
+
+    // Update go2rtc + motion listener
+    await syncCameraStream(camera);
+    syncMotionListener(camera);
+
     return NextResponse.json(camera);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 400 });
@@ -55,5 +95,10 @@ export async function DELETE(req: NextRequest) {
 
   const deleted = deleteCamera(id);
   if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Cleanup go2rtc + motion listener
+  unregisterStream(id).catch(() => {});
+  stopMotionListener(id);
+
   return NextResponse.json({ deleted: id });
 }

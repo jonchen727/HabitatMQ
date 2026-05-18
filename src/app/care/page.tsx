@@ -19,7 +19,7 @@ import { ProfileSwitcher } from "@/components/blocks/profile-switcher";
 import { PhotoThumb, PhotoLightbox } from "@/components/blocks/photo-upload";
 import { useProfileStore } from "@/store/use-profile-store";
 import { REPTILE_CARE_TYPES, AQUARIUM_CARE_TYPES } from "@/lib/schema";
-import type { CareEvent, CareEventType, FeedingData, AquariumFeedingData, HandlingData, MeasurementData, SheddingData, ScheduleEventData, BeddingChangeData, CleaningData } from "@/lib/schema";
+import type { CareEvent, CareEventType, FeedingData, AquariumFeedingData, HandlingData, MeasurementData, SheddingData, ScheduleEventData, BeddingChangeData, CleaningData, FeedingObservationData, BehaviorObservationData, MedicalObservationData } from "@/lib/schema";
 import { staggerContainer as container, staggerItem as item } from "@/lib/animations";
 
 const EVENT_COLORS: Record<string, string> = {
@@ -37,6 +37,7 @@ const EVENT_COLORS: Record<string, string> = {
   loss: "bg-red-400",
   maintenance: "bg-slate-400",
   medication: "bg-violet-400",
+  observation: "bg-cyan-400",
 };
 
 const EVENT_LABELS: Record<string, string> = {
@@ -54,6 +55,7 @@ const EVENT_LABELS: Record<string, string> = {
   loss: "Loss",
   maintenance: "Maintenance",
   medication: "Medication",
+  observation: "Observation",
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -279,6 +281,7 @@ export default function CarePage() {
             <FilterPill label="Shedding" color="bg-purple-400" active={filter === "shedding"} onClick={() => setFilter("shedding")} />
             <FilterPill label="Bedding" color="bg-yellow-600" active={filter === "bedding_change"} onClick={() => setFilter("bedding_change")} />
             <FilterPill label="Cleaning" color="bg-sky-400" active={filter === "cleaning"} onClick={() => setFilter("cleaning")} />
+            <FilterPill label="Observe" color="bg-cyan-400" active={filter === "observation"} onClick={() => setFilter("observation")} />
             <FilterPill label="Schedule" color="bg-orange-400" active={filter === "schedule"} onClick={() => setFilter("schedule")} />
           </>
         )}
@@ -317,6 +320,7 @@ export default function CarePage() {
                   key={event.id}
                   event={event}
                   careStats={careStats}
+                  allEvents={events}
                   onEdit={() => { setEditingEvent(event); setEditorOpen(true); }}
                   onDelete={() => handleDeleteEvent(event.id)}
                   onLightbox={(url) => setLightboxUrl(url)}
@@ -333,6 +337,7 @@ export default function CarePage() {
         initial={editingEvent}
         defaultDate={selectedDateStr ?? undefined}
         profileType={profileType}
+        feedingRecommendation={careStats?.feeding?.recommendation ?? null}
         onSave={handleSaveEvent}
         onClose={() => { setEditorOpen(false); setEditingEvent(null); }}
       />
@@ -367,10 +372,10 @@ function FilterPill({
 
 /* ─── Event Card ──────────────────────────────────────────────────────────── */
 function EventCard({
-  event, careStats, onEdit, onDelete, onLightbox,
+  event, careStats, allEvents, onEdit, onDelete, onLightbox,
 }: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  event: CareEvent; careStats: any; onEdit: () => void; onDelete: () => void; onLightbox?: (url: string) => void;
+  event: CareEvent; careStats: any; allEvents?: CareEvent[]; onEdit: () => void; onDelete: () => void; onLightbox?: (url: string) => void;
 }) {
   const d = event.data;
   const feedRec = careStats?.feeding?.recommendation;
@@ -453,13 +458,7 @@ function EventCard({
                     Next: {feedInfo.nextFeedWindow.earliest} → {feedInfo.nextFeedWindow.latest}
                   </p>
                 )}
-                {fd.preyWeightGrams && feedRec.preyWeightRange && (
-                  fd.preyWeightGrams < feedRec.preyWeightRange.min ? (
-                    <p className="text-[8px] text-amber-300/50">💡 {feedRec.sizeUpTip}</p>
-                  ) : fd.preyWeightGrams > feedRec.preyWeightRange.max ? (
-                    <p className="text-[8px] text-amber-300/50">⚠️ {feedRec.sizeDownTip}</p>
-                  ) : null
-                )}
+                {/* Size up/down tips moved to care-event-editor — only shown when editing a feeding */}
               </div>
             )}
           </>
@@ -663,6 +662,94 @@ function EventCard({
               </div>
               {cl.notes && <p className="text-[9px] text-white/20 italic mt-0.5">{cl.notes}</p>}
             </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Observation Card ── */}
+      {event.type === "observation" && "category" in d && (() => {
+        const obs = d as FeedingObservationData | BehaviorObservationData | MedicalObservationData;
+        return (
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-cyan-500/10">
+              <span className="text-sm">👁</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase bg-cyan-500/15 text-cyan-400">
+                  {obs.category}
+                </span>
+                {obs.category === "feeding" && (() => {
+                  const fo = obs as FeedingObservationData;
+                  return (
+                    <>
+                      <span className={cn(
+                        "px-1.5 py-0.5 rounded text-[8px] font-semibold",
+                        fo.lumpStatus === "no_lump" ? "bg-emerald-500/15 text-emerald-400"
+                        : fo.lumpStatus === "lump_visible" ? "bg-amber-500/15 text-amber-400"
+                        : "bg-red-500/15 text-red-400"
+                      )}>
+                        {fo.lumpStatus === "no_lump" ? "✓ No Lump"
+                          : fo.lumpStatus === "lump_visible" ? "⚠ Lump Visible"
+                          : "🚨 Regurgitation"}
+                      </span>
+                      <span className="text-[9px] text-cyan-400/60 font-medium">
+                        {fo.hoursSinceFeeding}h post-feed
+                      </span>
+                    </>
+                  );
+                })()}
+                {obs.category === "behavior" && (() => {
+                  const bo = obs as BehaviorObservationData;
+                  return bo.temperament ? (
+                    <span className="px-1.5 py-0.5 rounded text-[8px] font-semibold capitalize bg-blue-500/15 text-blue-400">
+                      {bo.temperament}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
+              {obs.category === "behavior" && (() => {
+                const bo = obs as BehaviorObservationData;
+                return (
+                  <>
+                    {bo.activity && <p className="text-[9px] text-white/30 mt-0.5">Activity: {bo.activity}</p>}
+                    {bo.location && <p className="text-[9px] text-white/30">Location: {bo.location}</p>}
+                  </>
+                );
+              })()}
+              {obs.notes && <p className="text-[9px] text-white/20 italic mt-0.5">{obs.notes}</p>}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Feeding card digestion enrichment — pull observations at render time */}
+      {event.type === "feeding" && "preyType" in d && allEvents && (() => {
+        const feedingObs = allEvents.filter(e =>
+          e.type === "observation" &&
+          "category" in e.data &&
+          (e.data as FeedingObservationData).category === "feeding" &&
+          (e.data as FeedingObservationData).linkedFeedingId === event.id
+        );
+        if (!feedingObs.length) return null;
+        return (
+          <div className="ml-11 space-y-0.5 mt-1">
+            {feedingObs.map(obs => {
+              const fo = obs.data as FeedingObservationData;
+              return (
+                <p key={obs.id} className={cn(
+                  "text-[9px] font-medium",
+                  fo.lumpStatus === "no_lump" ? "text-emerald-400/50"
+                  : fo.lumpStatus === "lump_visible" ? "text-amber-400/50"
+                  : "text-red-400/50"
+                )}>
+                  {fo.lumpStatus === "no_lump" ? "✓ No lump"
+                    : fo.lumpStatus === "lump_visible" ? "⚠ Lump visible"
+                    : "🚨 Regurgitation"}
+                  {" · "}{fo.hoursSinceFeeding}h post-feed
+                </p>
+              );
+            })}
           </div>
         );
       })()}

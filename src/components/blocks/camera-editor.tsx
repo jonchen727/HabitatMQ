@@ -16,7 +16,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Search, CheckCircle2, AlertCircle, Loader2, Radio, Wifi } from "lucide-react";
-import type { CameraDef, StreamProtocol, DetectionMode, ZoneDef } from "@/lib/schema";
+import type { CameraDef, StreamProtocol, DetectionMode, ZoneDef, OnvifMotionConfig } from "@/lib/schema";
 
 interface CameraEditorProps {
   open: boolean;
@@ -33,6 +33,7 @@ interface DetectedStream {
   height: number;
   fps: number;
   source: "rtsp" | "onvif";
+  profileToken?: string;
 }
 
 interface ProbeResult {
@@ -44,6 +45,7 @@ interface ProbeResult {
     profiles: string[];
     status: "ok" | "auth_failed" | "unreachable" | "error";
     statusMessage?: string;
+    supportsEvents?: boolean;
   };
   errors: string[];
 }
@@ -78,6 +80,16 @@ export function CameraEditor({ open, onClose, camera, onSave }: CameraEditorProp
   const [cameraIndex, setCameraIndex] = useState(0);
   const [mqttTopicPrefix, setMqttTopicPrefix] = useState("");
   const [zones, setZones] = useState<ZoneDef[]>([]);
+
+  // ── ONVIF fields ──
+  const [useOnvif, setUseOnvif] = useState(false);
+  const [onvifPort, setOnvifPort] = useState(2020);
+  const [onvifProfile, setOnvifProfile] = useState("");
+  const [motionDetection, setMotionDetection] = useState<OnvifMotionConfig>({
+    enabled: false,
+    mqttTopic: "",
+    cooldownSeconds: 30,
+  });
 
   // ── UI state ──
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -114,6 +126,10 @@ export function CameraEditor({ open, onClose, camera, onSave }: CameraEditorProp
       setCameraIndex(camera.cameraIndex);
       setMqttTopicPrefix(camera.mqttTopicPrefix);
       setZones(camera.zones);
+      setUseOnvif(camera.useOnvif ?? false);
+      setOnvifPort(camera.onvifPort ?? 2020);
+      setOnvifProfile(camera.onvifProfile ?? "");
+      setMotionDetection(camera.motionDetection ?? { enabled: false, mqttTopic: "", cooldownSeconds: 30 });
       setProbeResult(null);
     } else {
       setLabel("");
@@ -132,6 +148,10 @@ export function CameraEditor({ open, onClose, camera, onSave }: CameraEditorProp
       setCameraIndex(0);
       setMqttTopicPrefix("");
       setZones([]);
+      setUseOnvif(false);
+      setOnvifPort(2020);
+      setOnvifProfile("");
+      setMotionDetection({ enabled: false, mqttTopic: "", cooldownSeconds: 30 });
       setShowAdvanced(false);
       setProbeResult(null);
       setSelectedStreamIdx(0);
@@ -162,8 +182,20 @@ export function CameraEditor({ open, onClose, camera, onSave }: CameraEditorProp
         setSelectedStreamIdx(0);
         setUrl(stream.url);
         setProtocol("rtsp");
+
+        // ONVIF auto-populate
+        if (stream.source === "onvif" && stream.profileToken) {
+          setUseOnvif(true);
+          setOnvifProfile(stream.profileToken);
+          if (result.onvif?.supportsEvents) {
+            setMotionDetection(prev => ({
+              ...prev,
+              mqttTopic: `enclosure/${cameraIp.replace(/\./g, "_")}/motion`,
+            }));
+          }
+        }
+
         if (!label.trim()) {
-          // Auto-label from ONVIF device info or default
           const deviceLabel = result.onvif?.model
             ? `${result.onvif.manufacturer ?? ""} ${result.onvif.model}`.trim()
             : "Camera";
@@ -188,6 +220,14 @@ export function CameraEditor({ open, onClose, camera, onSave }: CameraEditorProp
     if (stream) {
       setUrl(stream.url);
       setProtocol("rtsp");
+      // Auto-set ONVIF profile if available
+      if (stream.source === "onvif" && stream.profileToken) {
+        setUseOnvif(true);
+        setOnvifProfile(stream.profileToken);
+      } else {
+        setUseOnvif(false);
+        setOnvifProfile("");
+      }
     }
   };
 
@@ -203,6 +243,10 @@ export function CameraEditor({ open, onClose, camera, onSave }: CameraEditorProp
       enabled,
       ...(username ? { username: username.trim() } : {}),
       ...(password ? { password: password.trim() } : {}),
+      useOnvif,
+      onvifPort,
+      ...(onvifProfile ? { onvifProfile } : {}),
+      motionDetection,
       detectionFps,
       sensitivity,
       minMotionArea,
@@ -410,19 +454,167 @@ export function CameraEditor({ open, onClose, camera, onSave }: CameraEditorProp
             </div>
           )}
 
+          {/* ── ONVIF Configuration (shown after probe or if useOnvif is set) ── */}
+          {(useOnvif || probeResult?.onvif?.status === "ok") && (
+            <div className="space-y-3 p-3 rounded-xl bg-cyan-500/[0.04] border border-cyan-500/10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Wifi className="w-3.5 h-3.5 text-cyan-400/50" />
+                  <span className="text-[10px] font-semibold text-cyan-400/60 uppercase tracking-wider">ONVIF Configuration</span>
+                </div>
+                {/* useOnvif Toggle */}
+                <button
+                  onClick={() => setUseOnvif(!useOnvif)}
+                  className={cn(
+                    "w-10 h-5 rounded-full transition-colors relative",
+                    useOnvif ? "bg-cyan-500/30" : "bg-white/[0.06]"
+                  )}
+                >
+                  <div className={cn(
+                    "w-4 h-4 rounded-full bg-white/60 absolute top-0.5 transition-transform",
+                    useOnvif ? "translate-x-5" : "translate-x-0.5"
+                  )} />
+                </button>
+              </div>
+
+              {useOnvif && (
+                <>
+                  {/* ONVIF Profile Selector */}
+                  {probeResult?.onvif?.profiles && probeResult.onvif.profiles.length > 0 && (
+                    <div className="space-y-1.5">
+                      <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
+                        ONVIF Profile
+                      </label>
+                      <div className="flex gap-1 p-1 rounded-xl bg-white/[0.03]">
+                        {probeResult.onvif.profiles.map((token) => (
+                          <button
+                            key={token}
+                            onClick={() => setOnvifProfile(token)}
+                            className={cn(
+                              "flex-1 py-1.5 rounded-lg text-[10px] font-semibold transition-all",
+                              onvifProfile === token
+                                ? "bg-cyan-500/15 text-cyan-400/80"
+                                : "text-white/20 hover:text-white/30"
+                            )}
+                          >
+                            {token}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ONVIF Port */}
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
+                      ONVIF Port
+                    </label>
+                    <input
+                      type="number"
+                      value={onvifPort}
+                      onChange={(e) => setOnvifPort(parseInt(e.target.value) || 2020)}
+                      className="field-input w-24"
+                      min={1}
+                      max={65535}
+                    />
+                  </div>
+
+                  <p className="text-[8px] text-white/10 leading-relaxed">
+                    ONVIF mode lets go2rtc auto-negotiate the stream — no manual RTSP path needed
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── Motion Detection via ONVIF Events ── */}
+          {(useOnvif || probeResult?.onvif?.supportsEvents) && (
+            <div className="space-y-3 p-3 rounded-xl bg-amber-500/[0.03] border border-amber-500/10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-3.5 h-3.5 text-amber-400/50" />
+                  <span className="text-[10px] font-semibold text-amber-400/60 uppercase tracking-wider">
+                    Motion Detection
+                  </span>
+                  {probeResult?.onvif?.supportsEvents && (
+                    <span className="text-[7px] text-emerald-400/50 bg-emerald-500/10 px-1.5 py-0.5 rounded-md font-bold uppercase">
+                      Supported
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setMotionDetection(prev => ({ ...prev, enabled: !prev.enabled }))}
+                  className={cn(
+                    "w-10 h-5 rounded-full transition-colors relative",
+                    motionDetection.enabled ? "bg-amber-500/30" : "bg-white/[0.06]"
+                  )}
+                >
+                  <div className={cn(
+                    "w-4 h-4 rounded-full bg-white/60 absolute top-0.5 transition-transform",
+                    motionDetection.enabled ? "translate-x-5" : "translate-x-0.5"
+                  )} />
+                </button>
+              </div>
+
+              {motionDetection.enabled && (
+                <>
+                  {/* MQTT Topic */}
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
+                      MQTT Motion Topic
+                    </label>
+                    <input
+                      value={motionDetection.mqttTopic}
+                      onChange={(e) => setMotionDetection(prev => ({ ...prev, mqttTopic: e.target.value }))}
+                      placeholder="enclosure/camera/motion"
+                      className="field-input font-mono text-[10px]"
+                    />
+                    <p className="text-[8px] text-white/10">
+                      Motion events published here as {`{motion: true/false, timestamp}`}
+                    </p>
+                  </div>
+
+                  {/* Cooldown */}
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
+                      Cooldown — {motionDetection.cooldownSeconds}s
+                    </label>
+                    <input
+                      type="range" min={0} max={120} step={5}
+                      value={motionDetection.cooldownSeconds}
+                      onChange={(e) => setMotionDetection(prev => ({ ...prev, cooldownSeconds: parseInt(e.target.value) }))}
+                      className="w-full h-1 bg-white/5 rounded-full appearance-none cursor-pointer accent-amber-400"
+                    />
+                    <div className="flex justify-between text-[7px] text-white/10">
+                      <span>0s (every event)</span>
+                      <span>120s (debounce)</span>
+                    </div>
+                  </div>
+
+                  <p className="text-[8px] text-white/10 leading-relaxed">
+                    Uses ONVIF PullMessages — camera&apos;s built-in detector does the work, zero CPU on Pi
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
           {/* ── Stream URL (auto-filled or manual) ── */}
           <div className="space-y-1.5">
             <label className="text-[9px] font-semibold text-white/25 uppercase tracking-[0.12em]">
-              Stream URL {probeResult?.success ? "(auto-detected)" : ""}
+              Stream URL {probeResult?.success ? "(auto-detected)" : ""} {useOnvif ? "· ONVIF mode" : ""}
             </label>
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="rtsp://192.168.1.55:554/stream1"
-              className="field-input font-mono text-[10px]"
+              placeholder={useOnvif ? "Auto-negotiated via ONVIF" : "rtsp://192.168.1.55:554/stream1"}
+              className={cn("field-input font-mono text-[10px]", useOnvif && "opacity-50")}
+              disabled={useOnvif}
             />
             <p className="text-[8px] text-white/10">
-              Credentials are injected server-side — only enter the URL without username:password
+              {useOnvif
+                ? "ONVIF mode — go2rtc discovers the stream automatically from the camera"
+                : "Credentials are injected server-side — only enter the URL without username:password"}
             </p>
           </div>
 

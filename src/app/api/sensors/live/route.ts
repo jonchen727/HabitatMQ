@@ -16,10 +16,15 @@ import {
   publishMqtt,
 } from "@/lib/mqtt-server";
 import { startScheduler } from "@/lib/scheduler";
+import { syncAllStreams } from "@/lib/go2rtc";
+import { syncMotionListeners } from "@/lib/onvif-events";
 
 // Start the subscriber and scheduler on first import (server-side only)
 startMqttSubscriber();
 startScheduler();
+
+// Sync go2rtc streams + ONVIF motion listeners (async, non-blocking)
+syncAllStreams().then(() => syncMotionListeners()).catch(console.error);
 
 export async function GET() {
   return NextResponse.json({

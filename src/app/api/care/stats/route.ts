@@ -17,7 +17,7 @@ import {
   assessGrowth,
   calcPreyWeight,
 } from "@/lib/species-profiles";
-import type { CareEvent, FeedingData, HandlingData, MeasurementData } from "@/lib/schema";
+import type { CareEvent, FeedingData, HandlingData, MeasurementData, ObservationData, FeedingObservationData } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -128,6 +128,26 @@ export async function GET(req: NextRequest) {
     else break;
   }
 
+  // ── Digestion observation for last feeding ──
+  let digestion: { lumpStatus: string; hoursSinceFeeding: number; observedAt: string } | null = null;
+  if (lastFed) {
+    const feedingObs = allEvents
+      .filter((e): e is CareEvent & { data: FeedingObservationData } =>
+        e.type === "observation" &&
+        (e.data as ObservationData)?.category === "feeding" &&
+        (e.data as FeedingObservationData)?.linkedFeedingId === lastFed.id
+      )
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const latestObs = feedingObs[0];
+    if (latestObs?.data) {
+      digestion = {
+        lumpStatus: latestObs.data.lumpStatus,
+        hoursSinceFeeding: latestObs.data.hoursSinceFeeding,
+        observedAt: latestObs.date,
+      };
+    }
+  }
+
   // ── Handling stats ──
   const handlingEvents = allEvents
     .filter((e): e is CareEvent & { data: HandlingData } => e.type === "handling")
@@ -227,6 +247,7 @@ export async function GET(req: NextRequest) {
       daysSinceLastFeed,
       status: feedingStatus,
       nextFeedWindow,
+      digestion,
       history: {
         totalFeedings,
         acceptanceRate,
