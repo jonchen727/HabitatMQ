@@ -20,7 +20,7 @@ import {
   CartesianGrid,
   ReferenceLine,
 } from "recharts";
-import { Activity, ChevronDown, ChevronUp, Sun, Flame, Lightbulb, Droplets, Zap, AlertTriangle, type LucideIcon } from "lucide-react";
+import { Activity, ChevronDown, ChevronUp, Sun, Flame, Lightbulb, Droplets, Zap, AlertTriangle, Eye, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { staggerItem as item } from "@/lib/animations";
 import type { SensorDef, ControlDef } from "@/lib/schema";
@@ -110,6 +110,22 @@ interface ControlBand {
   x2: number; // end ts (fraction 0-1 of time range)
 }
 
+/** Motion band with optional snapshot filmstrip URLs */
+interface MotionBand {
+  cameraId: string;
+  x1: number;
+  x2: number;
+  snapshots: string[]; // snapshot URLs for hover filmstrip
+  startTs: number;
+}
+
+/** Motion camera data from /api/history/motion */
+interface MotionCameraData {
+  label: string;
+  events: Array<{ ts: number; motion: number; snapshots: string[] }>;
+  beforeRange: { ts: number; motion: number } | null;
+}
+
 const RANGES = ["1h", "6h", "24h", "7d"] as const;
 type Range = (typeof RANGES)[number];
 
@@ -134,6 +150,8 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
   const [range, setRange] = useState<Range>("1h");
   const [mergedData, setMergedData] = useState<ReadingPoint[]>([]);
   const [controlBandsRaw, setControlBandsRaw] = useState<Map<string, ControlBand[]>>(new Map());
+  const [motionData, setMotionData] = useState<Map<string, { label: string; bands: MotionBand[] }>>(new Map());
+  const [hoveredMotion, setHoveredMotion] = useState<{ cameraId: string; bandIdx: number; x: number; y: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [showThresholds, setShowThresholds] = useState(false);
 
@@ -154,10 +172,11 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
     });
   }, []);
 
-  // Fetch sensor data
+  // Unified batch fetch — sensors + controls in a single API call
   useEffect(() => {
-    if (enabledIds.size === 0) {
+    if (enabledIds.size === 0 && controls.length === 0) {
       setMergedData([]);
+      setControlBandsRaw(new Map());
       return;
     }
 
@@ -165,43 +184,159 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
     const load = async () => {
       setLoading(true);
       try {
-        const ids = Array.from(enabledIds);
-        const fetches = ids.map((id) =>
-          fetch(`/api/sensors/history?id=${id}&range=${range}`)
-            .then((r) => r.json())
-            .then((d) => ({ id, points: (d.points ?? []) as RawPoint[] }))
-        );
-        const results = await Promise.all(fetches);
+        const sensorIds = Array.from(enabledIds);
+        const controlIds = controls.map((c) => c.id);
+
+        // Single batch request replaces N+1 individual fetches
+        const params = new URLSearchParams({ range });
+        if (sensorIds.length > 0) params.set("sensors", sensorIds.join(","));
+        if (controlIds.length > 0) params.set("controls", controlIds.join(","));
+
+        const res = await fetch(`/api/history/batch?${params}`);
+        const data = await res.json();
         if (!active) return;
 
-        const needsF = new Map<string, boolean>();
-        for (const s of numericSensors) {
-          needsF.set(s.id, s.displayUnit === "F" && (s.unit === "°C" || s.unit === "C"));
-        }
-
-        const timeMap = new Map<number, ReadingPoint>();
-        for (const { id, points } of results) {
-          const convert = needsF.get(id) ?? false;
-          let lastGood: number | null = null;
-
-          for (const p of points) {
-            let val = convert ? Math.round((p.value * 9 / 5 + 32) * 10) / 10 : p.value;
-
-            // Spike filter: drop > 30% from last good reading
-            if (lastGood !== null && lastGood > 0) {
-              const dropPct = (lastGood - val) / lastGood;
-              if (dropPct > 0.3) val = lastGood;
-            }
-            lastGood = val;
-
-            const key = Math.round(p.ts / 5000) * 5000;
-            const existing = timeMap.get(key) ?? { ts: key };
-            existing[id] = val;
-            timeMap.set(key, existing);
+        // ── Process sensor data ──
+        if (sensorIds.length > 0) {
+          const needsF = new Map<string, boolean>();
+          for (const s of numericSensors) {
+            needsF.set(s.id, s.displayUnit === "F" && (s.unit === "°C" || s.unit === "C"));
           }
+
+          const timeMap = new Map<number, ReadingPoint>();
+          for (const id of sensorIds) {
+            const points = (data.sensors?.[id] ?? []) as RawPoint[];
+            const convert = needsF.get(id) ?? false;
+            let lastGood: number | null = null;
+
+            for (const p of points) {
+              let val = convert ? Math.round((p.value * 9 / 5 + 32) * 10) / 10 : p.value;
+
+              // Spike filter: drop > 30% from last good reading
+              if (lastGood !== null && lastGood > 0) {
+                const dropPct = (lastGood - val) / lastGood;
+                if (dropPct > 0.3) val = lastGood;
+              }
+              lastGood = val;
+
+              const key = Math.round(p.ts / 5000) * 5000;
+              const existing = timeMap.get(key) ?? { ts: key };
+              existing[id] = val;
+              timeMap.set(key, existing);
+            }
+          }
+
+          setMergedData(Array.from(timeMap.values()).sort((a, b) => a.ts - b.ts));
+        } else {
+          setMergedData([]);
         }
 
-        setMergedData(Array.from(timeMap.values()).sort((a, b) => a.ts - b.ts));
+        // ── Process control band data ──
+        if (controlIds.length > 0) {
+          const now = Date.now();
+          const rangeMs = RANGE_MS[range];
+          const windowStart = now - rangeMs;
+          const bandsMap = new Map<string, ControlBand[]>();
+
+          for (const id of controlIds) {
+            const points = (data.controls?.[id] ?? []) as RawPoint[];
+
+            const bands: ControlBand[] = [];
+            let onStart: number | null = null;
+
+            // Check if control was ON before the range start
+            const beforePoint = data.controlBefore?.[id] as RawPoint | undefined;
+            if (beforePoint?.value === 1) {
+              onStart = windowStart; // was already ON at range start
+            }
+
+            for (const p of points) {
+              if (p.value === 1 && onStart === null) {
+                onStart = p.ts;
+              } else if (p.value === 0 && onStart !== null) {
+                bands.push({
+                  controlId: id,
+                  x1: Math.max(0, (onStart - windowStart) / rangeMs),
+                  x2: Math.min(1, (p.ts - windowStart) / rangeMs),
+                });
+                onStart = null;
+              }
+            }
+            // Still ON → extend to now
+            if (onStart !== null) {
+              bands.push({
+                controlId: id,
+                x1: Math.max(0, (onStart - windowStart) / rangeMs),
+                x2: 1,
+              });
+            }
+            if (bands.length > 0) bandsMap.set(id, bands);
+          }
+
+          setControlBandsRaw(bandsMap);
+        } else {
+          setControlBandsRaw(new Map());
+        }
+
+        // ── Fetch motion events (auto-discovered cameras) ──
+        try {
+          const motionRes = await fetch(`/api/history/motion?range=${range}`);
+          const motionJson = await motionRes.json();
+          if (!active) return;
+
+          const motionMap = new Map<string, { label: string; bands: MotionBand[] }>();
+          const now2 = Date.now();
+          const rangeMs2 = RANGE_MS[range];
+          const windowStart2 = now2 - rangeMs2;
+
+          for (const [camId, camData] of Object.entries(motionJson.cameras ?? {})) {
+            const cam = camData as MotionCameraData;
+            const bands: MotionBand[] = [];
+            let onStart: number | null = null;
+            let currentSnapshots: string[] = [];
+            let currentStartTs = 0;
+
+            // Check if motion was active before range start
+            if (cam.beforeRange?.motion === 1) {
+              onStart = windowStart2;
+              currentStartTs = cam.beforeRange.ts;
+            }
+
+            for (const ev of cam.events) {
+              if (ev.motion === 1 && onStart === null) {
+                onStart = ev.ts;
+                currentSnapshots = ev.snapshots;
+                currentStartTs = ev.ts;
+              } else if (ev.motion === 0 && onStart !== null) {
+                bands.push({
+                  cameraId: camId,
+                  x1: Math.max(0, (onStart - windowStart2) / rangeMs2),
+                  x2: Math.min(1, (ev.ts - windowStart2) / rangeMs2),
+                  snapshots: currentSnapshots,
+                  startTs: currentStartTs,
+                });
+                onStart = null;
+                currentSnapshots = [];
+              }
+            }
+            // Still active → extend to now
+            if (onStart !== null) {
+              bands.push({
+                cameraId: camId,
+                x1: Math.max(0, (onStart - windowStart2) / rangeMs2),
+                x2: 1,
+                snapshots: currentSnapshots,
+                startTs: currentStartTs,
+              });
+            }
+            if (bands.length > 0) {
+              motionMap.set(camId, { label: cam.label, bands });
+            }
+          }
+          setMotionData(motionMap);
+        } catch {
+          setMotionData(new Map());
+        }
       } catch { /* ignore */ }
       setLoading(false);
     };
@@ -209,68 +344,7 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
     load();
     const iv = setInterval(load, 30_000);
     return () => { active = false; clearInterval(iv); };
-  }, [enabledIds, range]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Fetch ALL control state history (always enabled)
-  useEffect(() => {
-    if (controls.length === 0) {
-      setControlBandsRaw(new Map());
-      return;
-    }
-
-    let active = true;
-    const load = async () => {
-      try {
-        const fetches = controls.map((c) =>
-          fetch(`/api/controls/history?id=${c.id}&range=${range}`)
-            .then((r) => r.json())
-            .then((d) => ({ id: c.id, points: (d.points ?? []) as RawPoint[] }))
-        );
-        const results = await Promise.all(fetches);
-        if (!active) return;
-
-        const now = Date.now();
-        const rangeMs = RANGE_MS[range];
-        const windowStart = now - rangeMs;
-        const bandsMap = new Map<string, ControlBand[]>();
-
-        for (const { id, points } of results) {
-          if (points.length === 0) continue;
-          const bands: ControlBand[] = [];
-          let onStart: number | null = null;
-
-          for (const p of points) {
-            if (p.value === 1 && onStart === null) {
-              onStart = p.ts;
-            } else if (p.value === 0 && onStart !== null) {
-              // Convert to 0-1 fraction of time range
-              bands.push({
-                controlId: id,
-                x1: Math.max(0, (onStart - windowStart) / rangeMs),
-                x2: Math.min(1, (p.ts - windowStart) / rangeMs),
-              });
-              onStart = null;
-            }
-          }
-          // Still ON → extend to now
-          if (onStart !== null) {
-            bands.push({
-              controlId: id,
-              x1: Math.max(0, (onStart - windowStart) / rangeMs),
-              x2: 1,
-            });
-          }
-          if (bands.length > 0) bandsMap.set(id, bands);
-        }
-
-        setControlBandsRaw(bandsMap);
-      } catch { /* ignore */ }
-    };
-
-    load();
-    const iv = setInterval(load, 30_000);
-    return () => { active = false; clearInterval(iv); };
-  }, [range, controls]);
+  }, [enabledIds, range, controls]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const formatTime = (ts: number) => {
     const d = new Date(ts);
@@ -553,6 +627,80 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Motion detection strips — auto-discovered from ONVIF cameras */}
+          {motionData.size > 0 && (
+            <div className="space-y-1 relative" style={{ paddingLeft: chartLeftMargin }}>
+              {Array.from(motionData.entries()).map(([camId, { label, bands }]) => (
+                <div key={camId} className="flex items-center gap-2">
+                  <div className="relative h-3 flex-1 rounded-full overflow-hidden bg-white/[0.03]">
+                    {bands.map((band, i) => (
+                      <div
+                        key={i}
+                        className="absolute top-0 h-full rounded-full cursor-pointer transition-opacity"
+                        style={{
+                          left: `${band.x1 * 100}%`,
+                          width: `${Math.max(0.5, (band.x2 - band.x1) * 100)}%`,
+                          backgroundColor: "#f43f5e",
+                          opacity: hoveredMotion?.cameraId === camId && hoveredMotion?.bandIdx === i ? 0.8 : 0.4,
+                        }}
+                        onMouseEnter={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setHoveredMotion({ cameraId: camId, bandIdx: i, x: rect.left + rect.width / 2, y: rect.top });
+                        }}
+                        onMouseLeave={() => setHoveredMotion(null)}
+                      >
+                        {(band.x2 - band.x1) > 0.03 && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <Eye className="w-2 h-2" style={{ color: "white", opacity: 0.9 }} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {/* Active motion indicator */}
+                    {bands.length > 0 && bands[bands.length - 1].x2 >= 0.99 && (
+                      <div className="absolute right-0.5 top-0 h-full flex items-center">
+                        <Eye className="w-2.5 h-2.5 animate-pulse" style={{ color: "#f43f5e", opacity: 0.8 }} />
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[7px] text-white/20 font-medium w-12 text-right shrink-0 truncate">
+                    {label}
+                  </span>
+                </div>
+              ))}
+
+              {/* Hover thumbnail popup */}
+              {hoveredMotion && (() => {
+                const camData = motionData.get(hoveredMotion.cameraId);
+                const band = camData?.bands[hoveredMotion.bandIdx];
+                if (!band || band.snapshots.length === 0) return null;
+                // Show first snapshot as preview thumbnail
+                const previewUrl = band.snapshots[0];
+                const time = new Date(band.startTs);
+                const timeStr = `${time.getHours()}:${String(time.getMinutes()).padStart(2, "0")}:${String(time.getSeconds()).padStart(2, "0")}`;
+                return (
+                  <div
+                    className="absolute z-50 -top-36 left-1/2 -translate-x-1/2 pointer-events-none"
+                    style={{ left: hoveredMotion.x }}
+                  >
+                    <div className="bg-black/90 backdrop-blur-sm rounded-lg border border-white/10 p-1.5 shadow-xl">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={previewUrl}
+                        alt="Motion snapshot"
+                        className="w-32 h-24 object-cover rounded"
+                      />
+                      <div className="flex items-center justify-between mt-1 px-0.5">
+                        <span className="text-[8px] text-white/50 font-mono">{timeStr}</span>
+                        <span className="text-[8px] text-rose-400/70">{band.snapshots.length} frames</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>

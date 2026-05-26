@@ -401,9 +401,13 @@ function ChartWidget({ pane, sensor, value }: WidgetProps) {
   useEffect(() => {
     let active = true;
     const load = () => {
-      fetch(`/api/sensors/history?id=${sensor.id}&range=${range}`)
+      fetch(`/api/history/batch?sensors=${sensor.id}&range=${range}`)
         .then((r) => r.json())
-        .then((d) => { if (active && d.points) setPoints(d.points); })
+        .then((d) => {
+          if (active && d.sensors?.[sensor.id]) {
+            setPoints(d.sensors[sensor.id]);
+          }
+        })
         .catch(() => {});
     };
     load();

@@ -117,6 +117,25 @@ function initSchema(db: Database.Database) {
       profile_id TEXT NOT NULL DEFAULT 'aspen',
       data TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS sensor_rollups (
+      sensor_id TEXT NOT NULL,
+      bucket INTEGER NOT NULL,
+      avg_value REAL NOT NULL,
+      min_value REAL NOT NULL,
+      max_value REAL NOT NULL,
+      count INTEGER NOT NULL,
+      PRIMARY KEY (sensor_id, bucket)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rollups_sensor_bucket ON sensor_rollups(sensor_id, bucket);
+    CREATE TABLE IF NOT EXISTS motion_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      camera_id TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      motion INTEGER NOT NULL,
+      snapshot_path TEXT,
+      UNIQUE(camera_id, ts)
+    );
+    CREATE INDEX IF NOT EXISTS idx_motion_camera_ts ON motion_events(camera_id, ts);
   `);
 
   // Step 2: Migrations — add columns to pre-existing tables that lack them
@@ -657,12 +676,20 @@ export function deleteInhabitant(id: string): boolean {
 
 // ─── Sensor Readings (Time-Series) ──────────────────────────────────────────
 
+/** In-memory write throttle — only persist one reading per minute per sensor */
+const lastWriteTs = new Map<string, number>();
+const WRITE_THROTTLE_MS = 60_000; // 1 minute
+
 export function logReading(sensorId: string, value: number) {
+  const now = Date.now();
+  const last = lastWriteTs.get(sensorId) ?? 0;
+  if (now - last < WRITE_THROTTLE_MS) return; // skip — too soon
+  lastWriteTs.set(sensorId, now);
   const db = getDb();
   try {
     db.prepare(
       `INSERT INTO sensor_readings (sensor_id, value, ts) VALUES (?, ?, ?)`
-    ).run(sensorId, value, Date.now());
+    ).run(sensorId, value, now);
   } finally { db.close(); }
 }
 
@@ -673,7 +700,8 @@ export interface ReadingPoint {
 
 /**
  * Get sensor readings for a time range.
- * maxPoints controls downsampling — if more rows exist, we bucket-average.
+ * maxPoints controls downsampling — if more rows exist, we time-bucket average.
+ * Uses integer division on timestamp for O(n) single-pass grouping (no window functions).
  */
 export function getReadings(
   sensorId: string,
@@ -682,30 +710,133 @@ export function getReadings(
 ): ReadingPoint[] {
   const db = getDb();
   try {
-    // Get raw count first
-    const countRow = db.prepare(
-      `SELECT COUNT(*) as cnt FROM sensor_readings WHERE sensor_id = ? AND ts >= ?`
-    ).get(sensorId, sinceMs) as { cnt: number };
+    const now = Date.now();
+    const rangeMs = now - sinceMs;
+    const bucketMs = Math.ceil(rangeMs / maxPoints);
 
-    if (countRow.cnt <= maxPoints) {
-      // Return all points
+    // Single query — time-bucket GROUP BY avoids ROW_NUMBER() window function
+    const rows = db.prepare(
+      `SELECT AVG(value) as value, MIN(ts) as ts
+       FROM sensor_readings
+       WHERE sensor_id = ? AND ts >= ?
+       GROUP BY (ts / ?)
+       ORDER BY ts ASC`
+    ).all(sensorId, sinceMs, bucketMs) as ReadingPoint[];
+    return rows;
+  } finally { db.close(); }
+}
+
+/**
+ * Get readings from the rollup table for longer time ranges (>6h).
+ * Falls back to raw readings if rollups don't exist yet.
+ */
+export function getReadingsFromRollups(
+  sensorId: string,
+  sinceMs: number,
+  maxPoints = 200,
+): ReadingPoint[] {
+  const db = getDb();
+  try {
+    // Check if rollups exist for this sensor in the time range
+    const rollupCount = (db.prepare(
+      `SELECT COUNT(*) as cnt FROM sensor_rollups WHERE sensor_id = ? AND bucket >= ?`
+    ).get(sensorId, sinceMs) as { cnt: number }).cnt;
+
+    if (rollupCount === 0) {
+      // No rollups yet — fall back to raw readings
+      db.close();
+      return getReadings(sensorId, sinceMs, maxPoints);
+    }
+
+    const rangeMs = Date.now() - sinceMs;
+    const bucketMs = Math.ceil(rangeMs / maxPoints);
+    const ROLLUP_INTERVAL = 300_000; // 5 minutes
+
+    if (bucketMs <= ROLLUP_INTERVAL) {
+      // Rollup granularity is sufficient — return directly
       return db.prepare(
-        `SELECT value, ts FROM sensor_readings WHERE sensor_id = ? AND ts >= ? ORDER BY ts ASC`
+        `SELECT avg_value as value, bucket as ts
+         FROM sensor_rollups
+         WHERE sensor_id = ? AND bucket >= ?
+         ORDER BY bucket ASC`
       ).all(sensorId, sinceMs) as ReadingPoint[];
     }
 
-    // Downsample: bucket into maxPoints intervals
-    const bucketSize = Math.ceil(countRow.cnt / maxPoints);
-    const rows = db.prepare(
-      `SELECT AVG(value) as value, MIN(ts) as ts
-       FROM (
-         SELECT value, ts, (ROW_NUMBER() OVER (ORDER BY ts ASC) - 1) / ? as bucket
-         FROM sensor_readings
-         WHERE sensor_id = ? AND ts >= ?
-       ) GROUP BY bucket ORDER BY ts ASC`
-    ).all(bucketSize, sensorId, sinceMs) as ReadingPoint[];
-    return rows;
+    // Re-bucket rollups into coarser intervals
+    return db.prepare(
+      `SELECT AVG(avg_value) as value, MIN(bucket) as ts
+       FROM sensor_rollups
+       WHERE sensor_id = ? AND bucket >= ?
+       GROUP BY (bucket / ?)
+       ORDER BY ts ASC`
+    ).all(sensorId, sinceMs, bucketMs) as ReadingPoint[];
   } finally { db.close(); }
+}
+
+/**
+ * Batch-fetch readings for multiple sensor/control IDs in a single DB session.
+ * Returns Map<id, ReadingPoint[]>.
+ */
+export function getMultiReadings(
+  ids: string[],
+  sinceMs: number,
+  maxPoints = 200,
+  _useRollups = false, // kept for API compat but now always merges both
+): Map<string, ReadingPoint[]> {
+  const result = new Map<string, ReadingPoint[]>();
+  if (ids.length === 0) return result;
+
+  // Use a single DB connection for all queries
+  const db = getDb();
+  try {
+    const now = Date.now();
+    const rangeMs = now - sinceMs;
+    const bucketMs = Math.ceil(rangeMs / maxPoints);
+
+    // Always merge raw + rollup tables via UNION ALL.
+    // After compaction, recent data is in raw and older data is in rollups.
+    // Querying only one table causes gaps.
+    const stmt = db.prepare(
+      `SELECT AVG(value) as value, MIN(ts) as ts FROM (
+         SELECT value, ts FROM sensor_readings
+           WHERE sensor_id = ? AND ts >= ?
+         UNION ALL
+         SELECT avg_value as value, bucket as ts FROM sensor_rollups
+           WHERE sensor_id = ? AND bucket >= ?
+       ) combined
+       GROUP BY (ts / ?)
+       ORDER BY ts ASC`
+    );
+
+    for (const id of ids) {
+      const rows = stmt.all(id, sinceMs, id, sinceMs, bucketMs) as ReadingPoint[];
+      result.set(id, rows);
+    }
+  } finally { db.close(); }
+  return result;
+}
+
+/**
+ * Get the last reading for each control before a timestamp.
+ * Used by batch API to prepend synthetic ON points for control bands.
+ */
+export function getMultiLastReadingBefore(
+  ids: string[],
+  beforeMs: number,
+): Map<string, ReadingPoint> {
+  const result = new Map<string, ReadingPoint>();
+  if (ids.length === 0) return result;
+  const db = getDb();
+  try {
+    const stmt = db.prepare(
+      `SELECT value, ts FROM sensor_readings WHERE sensor_id = ? AND ts < ? ORDER BY ts DESC LIMIT 1`
+    );
+    for (const id of ids) {
+      const row = stmt.get(id, beforeMs) as ReadingPoint | undefined;
+      if (row) result.set(id, row);
+    }
+  } finally { db.close(); }
+  return result;
 }
 
 /** Get the last reading for a sensor before the given timestamp */
@@ -728,6 +859,223 @@ export function pruneOldReadings(retentionMs = 7 * 24 * 60 * 60 * 1000) {
   try {
     const cutoff = Date.now() - retentionMs;
     db.prepare(`DELETE FROM sensor_readings WHERE ts < ?`).run(cutoff);
+  } finally { db.close(); }
+}
+
+// ─── Motion Events ──────────────────────────────────────────────────────────
+
+export interface MotionEvent {
+  camera_id: string;
+  ts: number;
+  motion: number; // 1=start, 0=end
+  snapshot_path: string | null;
+}
+
+/** Log a motion start/end event, optionally with a snapshot path */
+export function logMotionEvent(cameraId: string, motion: boolean, snapshotPath?: string): void {
+  const db = getDb();
+  try {
+    db.prepare(
+      `INSERT OR IGNORE INTO motion_events (camera_id, ts, motion, snapshot_path) VALUES (?, ?, ?, ?)`
+    ).run(cameraId, Date.now(), motion ? 1 : 0, snapshotPath ?? null);
+  } finally { db.close(); }
+}
+
+/** Get motion events for a camera within a time range */
+export function getMotionEvents(cameraId: string, sinceMs: number): MotionEvent[] {
+  const db = getDb();
+  try {
+    return db.prepare(
+      `SELECT camera_id, ts, motion, snapshot_path FROM motion_events
+       WHERE camera_id = ? AND ts >= ?
+       ORDER BY ts ASC`
+    ).all(cameraId, sinceMs) as MotionEvent[];
+  } finally { db.close(); }
+}
+
+/** Get the last motion event before a given timestamp (for state-before-range) */
+export function getMotionBefore(cameraId: string, beforeMs: number): MotionEvent | null {
+  const db = getDb();
+  try {
+    return (db.prepare(
+      `SELECT camera_id, ts, motion, snapshot_path FROM motion_events
+       WHERE camera_id = ? AND ts < ?
+       ORDER BY ts DESC LIMIT 1`
+    ).get(cameraId, beforeMs) as MotionEvent | undefined) ?? null;
+  } finally { db.close(); }
+}
+
+/** Prune motion events older than retention period + delete snapshot files */
+export function pruneMotionEvents(retentionMs = 7 * 24 * 60 * 60 * 1000): number {
+  const db = getDb();
+  try {
+    const cutoff = Date.now() - retentionMs;
+    // Get snapshot paths before deleting rows
+    const oldEvents = db.prepare(
+      `SELECT snapshot_path FROM motion_events WHERE ts < ? AND snapshot_path IS NOT NULL`
+    ).all(cutoff) as { snapshot_path: string }[];
+
+    // Delete old snapshot files
+    const SNAPSHOT_BASE = process.env.NODE_ENV === "production"
+      ? path.join(process.cwd(), "..", "enclosure-data", "motion-snapshots")
+      : path.join(process.cwd(), "public", "motion-snapshots");
+    for (const { snapshot_path } of oldEvents) {
+      try {
+        const fullPath = path.join(SNAPSHOT_BASE, snapshot_path);
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      } catch { /* best effort */ }
+    }
+
+    // Delete rows
+    const result = db.prepare(`DELETE FROM motion_events WHERE ts < ?`).run(cutoff);
+    return result.changes;
+  } finally { db.close(); }
+}
+
+// ─── Rollup Compaction ──────────────────────────────────────────────────────
+
+const ROLLUP_INTERVAL_MS = 300_000; // 5-minute buckets
+const COMPACT_THRESHOLD_MS = 2 * 60 * 60 * 1000; // compact data older than 2 hours
+
+/**
+ * Compact raw sensor_readings older than 2 hours into 5-minute rollup buckets.
+ * After aggregation, the compacted raw rows are deleted to save space.
+ * Safe to call repeatedly — uses INSERT OR REPLACE for idempotency.
+ */
+export function compactReadings() {
+  const db = getDb();
+  try {
+    const cutoff = Date.now() - COMPACT_THRESHOLD_MS;
+
+    // Aggregate raw readings into rollup buckets
+    db.prepare(
+      `INSERT OR REPLACE INTO sensor_rollups (sensor_id, bucket, avg_value, min_value, max_value, count)
+       SELECT
+         sensor_id,
+         (ts / ${ROLLUP_INTERVAL_MS}) * ${ROLLUP_INTERVAL_MS} as bucket,
+         AVG(value),
+         MIN(value),
+         MAX(value),
+         COUNT(*)
+       FROM sensor_readings
+       WHERE ts < ?
+       GROUP BY sensor_id, bucket`
+    ).run(cutoff);
+
+    // Delete the compacted raw rows
+    db.prepare(`DELETE FROM sensor_readings WHERE ts < ?`).run(cutoff);
+
+    console.log(`[db] compacted readings older than ${new Date(cutoff).toISOString()}`);
+  } finally { db.close(); }
+}
+
+// ─── Daily Extremes (for care log) ──────────────────────────────────────────
+
+export interface DailyExtreme {
+  date: string; // YYYY-MM-DD
+  sensorId: string;
+  high: number;
+  low: number;
+  avg: number;
+  count: number;
+}
+
+/**
+ * Get daily high/low/avg for sensors over a date range.
+ * Combines raw readings + rollup data for full coverage.
+ * Used by the care calendar to show temperature conditions.
+ */
+export function getDailyExtremes(
+  sensorIds: string[],
+  startDate: string, // YYYY-MM-DD
+  endDate: string,   // YYYY-MM-DD
+): DailyExtreme[] {
+  if (sensorIds.length === 0) return [];
+  const db = getDb();
+  try {
+    const startMs = new Date(startDate + "T00:00:00").getTime();
+    const endMs = new Date(endDate + "T23:59:59.999").getTime();
+    const results: DailyExtreme[] = [];
+
+    // Query rollups (filter out glitch 0°C readings from min aggregation)
+    const rollupStmt = db.prepare(
+      `SELECT
+         sensor_id,
+         date(bucket / 1000, 'unixepoch', 'localtime') as day,
+         AVG(avg_value) as avg_val,
+         MIN(CASE WHEN min_value > 1 THEN min_value END) as min_val,
+         MAX(max_value) as max_val,
+         SUM(count) as total_count
+       FROM sensor_rollups
+       WHERE sensor_id = ? AND bucket >= ? AND bucket <= ? AND avg_value > 1
+       GROUP BY sensor_id, day
+       ORDER BY day ASC`
+    );
+
+    // Query raw readings (for recent data not yet compacted, filter glitch 0s)
+    const rawStmt = db.prepare(
+      `SELECT
+         sensor_id,
+         date(ts / 1000, 'unixepoch', 'localtime') as day,
+         AVG(value) as avg_val,
+         MIN(CASE WHEN value > 1 THEN value END) as min_val,
+         MAX(value) as max_val,
+         COUNT(*) as total_count
+       FROM sensor_readings
+       WHERE sensor_id = ? AND ts >= ? AND ts <= ? AND value > 1
+       GROUP BY sensor_id, day
+       ORDER BY day ASC`
+    );
+
+    for (const sensorId of sensorIds) {
+      // Merge rollup + raw data per day
+      const dayMap = new Map<string, { sum: number; min: number; max: number; count: number }>();
+
+      const rollupRows = rollupStmt.all(sensorId, startMs, endMs) as {
+        sensor_id: string; day: string; avg_val: number; min_val: number; max_val: number; total_count: number;
+      }[];
+      for (const r of rollupRows) {
+        dayMap.set(r.day, {
+          sum: r.avg_val * r.total_count,
+          min: r.min_val,
+          max: r.max_val,
+          count: r.total_count,
+        });
+      }
+
+      const rawRows = rawStmt.all(sensorId, startMs, endMs) as {
+        sensor_id: string; day: string; avg_val: number; min_val: number; max_val: number; total_count: number;
+      }[];
+      for (const r of rawRows) {
+        const existing = dayMap.get(r.day);
+        if (existing) {
+          existing.sum += r.avg_val * r.total_count;
+          existing.min = Math.min(existing.min, r.min_val);
+          existing.max = Math.max(existing.max, r.max_val);
+          existing.count += r.total_count;
+        } else {
+          dayMap.set(r.day, {
+            sum: r.avg_val * r.total_count,
+            min: r.min_val,
+            max: r.max_val,
+            count: r.total_count,
+          });
+        }
+      }
+
+      for (const [day, data] of dayMap) {
+        results.push({
+          date: day,
+          sensorId,
+          high: Math.round(data.max * 10) / 10,
+          low: Math.round(data.min * 10) / 10,
+          avg: Math.round((data.sum / data.count) * 10) / 10,
+          count: data.count,
+        });
+      }
+    }
+
+    return results.sort((a, b) => a.date.localeCompare(b.date) || a.sensorId.localeCompare(b.sensorId));
   } finally { db.close(); }
 }
 

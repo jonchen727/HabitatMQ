@@ -21,10 +21,20 @@ import type { CareEvent, FeedingData, HandlingData, MeasurementData, Observation
 
 export const dynamic = "force-dynamic";
 
+// In-memory cache — stats are expensive to compute (2-min TTL)
+const statsCache = new Map<string, { data: unknown; ts: number }>();
+const CACHE_TTL_MS = 2 * 60 * 1000;
+
 export async function GET(req: NextRequest) {
   const profileId = req.nextUrl.searchParams.get("profileId");
   if (!profileId) {
     return NextResponse.json({ error: "Missing ?profileId=" }, { status: 400 });
+  }
+
+  // Check in-memory cache first
+  const cached = statsCache.get(profileId);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return NextResponse.json(cached.data);
   }
 
   // Get all care events (no month filter = all time)
@@ -205,13 +215,14 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({
+  const responseData = {
     inhabitant: {
       id: inhabitant.id,
       name: inhabitant.name ?? inhabitant.commonName,
       speciesProfileId: inhabitant.speciesProfileId,
       sex: inhabitant.sex,
       morph: inhabitant.morph,
+      birthDate: inhabitant.birthDate ?? null,
       currentWeightG,
       currentLengthCm,
       lifeStage: lifeStage ? {
@@ -283,5 +294,10 @@ export async function GET(req: NextRequest) {
       husbandry: speciesProfile.husbandry,
       bodyCondition: speciesProfile.bodyCondition,
     },
-  });
+  };
+
+  // Store in cache
+  statsCache.set(profileId, { data: responseData, ts: Date.now() });
+
+  return NextResponse.json(responseData);
 }

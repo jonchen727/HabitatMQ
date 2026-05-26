@@ -11,7 +11,7 @@
  */
 
 import mqtt, { type MqttClient } from "mqtt";
-import { listSensors, getMqttConfig, logReading, pruneOldReadings } from "./db";
+import { listSensors, getMqttConfig, logReading, pruneOldReadings, compactReadings, pruneMotionEvents } from "./db";
 import type { SensorDef, PayloadType } from "./schema";
 
 interface CachedReading {
@@ -125,9 +125,11 @@ export function startMqttSubscriber() {
     }
   });
 
-  // Prune old readings once per hour
+  // Compact readings into rollups + prune old raw data + prune motion snapshots, once per hour
   setInterval(() => {
+    try { compactReadings(); } catch { /* non-fatal */ }
     try { pruneOldReadings(); } catch { /* non-fatal */ }
+    try { pruneMotionEvents(); } catch { /* non-fatal */ }
   }, 60 * 60 * 1000);
 }
 

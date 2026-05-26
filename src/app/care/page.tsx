@@ -12,7 +12,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   ChevronLeft, ChevronRight, Plus, Check, X, Pencil,
-  Scale, Ruler, Hand, Droplets, Sun as SunIcon, Trash2,
+  Scale, Ruler, Hand, Droplets, Sun as SunIcon, Trash2, Thermometer,
 } from "lucide-react";
 import { CareEventEditor } from "@/components/blocks/care-event-editor";
 import { ProfileSwitcher } from "@/components/blocks/profile-switcher";
@@ -21,6 +21,7 @@ import { useProfileStore } from "@/store/use-profile-store";
 import { REPTILE_CARE_TYPES, AQUARIUM_CARE_TYPES } from "@/lib/schema";
 import type { CareEvent, CareEventType, FeedingData, AquariumFeedingData, HandlingData, MeasurementData, SheddingData, ScheduleEventData, BeddingChangeData, CleaningData, FeedingObservationData, BehaviorObservationData, MedicalObservationData } from "@/lib/schema";
 import { staggerContainer as container, staggerItem as item } from "@/lib/animations";
+import { assessGrowth, getSpeciesProfile } from "@/lib/species-profiles";
 
 const EVENT_COLORS: Record<string, string> = {
   feeding: "bg-amber-400",
@@ -99,6 +100,17 @@ export default function CarePage() {
   const profileType = profile?.type ?? "reptile";
   const careTypes = profileType === "aquarium" ? AQUARIUM_CARE_TYPES : REPTILE_CARE_TYPES;
 
+  // Daily temperature extremes (hot/cold side)
+  interface DailyExtreme {
+    date: string;
+    sensorId: string;
+    high: number;
+    low: number;
+    avg: number;
+    count: number;
+  }
+  const [dailyExtremes, setDailyExtremes] = useState<DailyExtreme[]>([]);
+
   const fetchEvents = useCallback(async () => {
     try {
       const res = await fetch(`/api/care?month=${toMonthStr(year, month)}&profileId=${activeProfileId}`);
@@ -106,16 +118,24 @@ export default function CarePage() {
     } catch (err) { console.error("Failed to fetch care events:", err); }
   }, [year, month, activeProfileId]);
 
-  useEffect(() => { fetchEvents(); }, [fetchEvents]);
-
-  // Fetch care stats for inline enrichment
+  // Fetch events, stats, and extremes in parallel — no waterfall
   useEffect(() => {
     if (!activeProfileId) return;
-    fetch(`/api/care/stats?profileId=${activeProfileId}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then(setCareStats)
-      .catch(() => {});
-  }, [activeProfileId, events]);
+    const monthStr = toMonthStr(year, month);
+
+    Promise.all([
+      fetch(`/api/care?month=${monthStr}&profileId=${activeProfileId}`)
+        .then((r) => r.ok ? r.json() : []),
+      fetch(`/api/care/stats?profileId=${activeProfileId}`)
+        .then((r) => r.ok ? r.json() : null),
+      fetch(`/api/care/extremes?profileId=${activeProfileId}&month=${monthStr}`)
+        .then((r) => r.ok ? r.json() : null),
+    ]).then(([evts, stats, extremes]) => {
+      setEvents(evts);
+      setCareStats(stats);
+      setDailyExtremes(extremes?.all ?? []);
+    }).catch((err) => console.error("Failed to fetch care data:", err));
+  }, [activeProfileId, year, month]);
 
   function prevMonth() {
     if (month === 0) { setMonth(11); setYear(year - 1); }
@@ -303,6 +323,64 @@ export default function CarePage() {
               })}
               {isMounted && dayEvents.length > 0 && ` · ${dayEvents.length} event${dayEvents.length > 1 ? "s" : ""}`}
             </p>
+
+            {/* Daily Temperature Extremes Strip */}
+            {(() => {
+              if (!selectedDateStr || dailyExtremes.length === 0) return null;
+              const dayExtremes = dailyExtremes.filter(e => e.date === selectedDateStr);
+              if (dayExtremes.length === 0) return null;
+
+              // C→F conversion (sensor data is stored in °C)
+              const toF = (c: number) => Math.round((c * 9 / 5 + 32) * 10) / 10;
+
+              // Filter out obvious 0°C readings (sensor glitches / disconnects)
+              const cleanExtremes = dayExtremes.map(e => ({
+                ...e,
+                high: toF(e.high),
+                low: e.low <= 1 ? null : toF(e.low), // 0-1°C is a sensor glitch
+                avg: toF(e.avg),
+              }));
+
+              // Group by sensor — first sensor matching "hot"/"warm" is hot side, "cold"/"cool" is cold side
+              const hot = cleanExtremes.find(e => e.sensorId.match(/hot|warm|basking/i));
+              const cold = cleanExtremes.find(e => e.sensorId.match(/cold|cool|ambient/i));
+
+              // If we can't distinguish sides, show all as a combined row
+              if (!hot && !cold) {
+                const combined = cleanExtremes[0];
+                return (
+                  <div className="glass rounded-2xl p-3 flex items-center gap-3">
+                    <Thermometer className="w-3.5 h-3.5 text-white/25" />
+                    <div className="flex gap-3 text-[10px]">
+                      <span className="text-red-400/70">↑ {combined.high}°F</span>
+                      {combined.low != null && <span className="text-blue-400/70">↓ {combined.low}°F</span>}
+                      <span className="text-white/25">avg {combined.avg}°F</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="glass rounded-2xl p-3 flex items-center gap-4">
+                  <Thermometer className="w-3.5 h-3.5 text-white/25 flex-shrink-0" />
+                  {hot && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[8px] font-semibold text-orange-400/50 uppercase">Hot</span>
+                      <span className="text-[10px] text-red-400/70">↑{hot.high}°F</span>
+                      {hot.low != null && <span className="text-[10px] text-blue-400/70">↓{hot.low}°F</span>}
+                    </div>
+                  )}
+                  {hot && cold && <div className="w-px h-4 bg-white/[0.06]" />}
+                  {cold && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[8px] font-semibold text-cyan-400/50 uppercase">Cold</span>
+                      <span className="text-[10px] text-red-400/70">↑{cold.high}°F</span>
+                      {cold.low != null && <span className="text-[10px] text-blue-400/70">↓{cold.low}°F</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {dayEvents.length === 0 ? (
               <div className="glass rounded-[20px] p-6 text-center">
@@ -529,7 +607,19 @@ function EventCard({
       {/* ── Measurement Card ── */}
       {event.type === "measurement" && "weightGrams" in d && (() => {
         const md = d as MeasurementData;
-        const ga = careStats?.inhabitant?.growthAssessment;
+        // Compute growth assessment for THIS measurement's weight, not the global latest
+        const inh = careStats?.inhabitant;
+        let ga = null;
+        if (md.weightGrams && inh?.speciesProfileId && inh?.sex && inh.sex !== "unsexed" && inh?.birthDate) {
+          const sp = getSpeciesProfile(inh.speciesProfileId);
+          if (sp) {
+            // Calculate age at the time of this measurement, not today
+            const birthMs = new Date(inh.birthDate).getTime();
+            const measurementMs = new Date(event.date).getTime();
+            const ageMonths = Math.round((measurementMs - birthMs) / (30.44 * 24 * 60 * 60 * 1000));
+            ga = assessGrowth(sp, inh.sex as "male" | "female", ageMonths, md.weightGrams);
+          }
+        }
         return (
           <>
             <div className="flex items-center gap-3">

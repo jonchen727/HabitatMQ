@@ -9,6 +9,8 @@
  */
 
 import type { CameraDef } from "@/lib/schema";
+import { startMotionCapture, stopMotionCapture } from "@/lib/motion-snapshots";
+import { logMotionEvent } from "@/lib/db";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Cam = require("onvif").Cam;
@@ -145,6 +147,17 @@ export async function startMotionListener(camera: CameraDef): Promise<boolean> {
 
           console.log(`[onvif-events] ${id}: motion=${motion}`);
           emitMotion(id, motion);
+
+          // ── Persist motion event + manage snapshot capture ──
+          if (motion) {
+            // Start 1fps snapshot capture
+            const relDir = startMotionCapture(camera);
+            logMotionEvent(id, true, relDir ?? undefined);
+          } else {
+            // Stop capture + log end event
+            stopMotionCapture(id);
+            logMotionEvent(id, false);
+          }
 
           // Publish to MQTT if configured
           if (motionDetection.mqttTopic) {
