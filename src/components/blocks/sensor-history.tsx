@@ -454,29 +454,124 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
             />
           ))}
           <Tooltip
-            contentStyle={{
-              background: "rgba(0,0,0,0.85)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              borderRadius: 10,
-              fontSize: 10,
-              color: "white",
-              padding: "8px 12px",
-            }}
-            labelFormatter={(l: unknown) => formatTime(l as number)}
-            formatter={(v: unknown, name: unknown) => {
-              const sensor = numericSensors.find((s) => s.id === name);
-              const unit = sensor?.displayUnit === "F" ? "°F" : sensor?.unit ?? "";
-              const val = `${Number(v).toFixed(1)} ${unit}`;
-              const label = sensor?.label ?? String(name);
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const ts = label as number;
 
-              // Only append threshold rows when the lines are toggled on
-              if (!showThresholds || !sensor) return [val, label];
-              const parts: string[] = [val];
-              if (sensor.warningLow != null)  parts.push(`⚠ Warn Low ${sensor.warningLow}${unit}`);
-              if (sensor.warningHigh != null) parts.push(`⚠ Warn High ${sensor.warningHigh}${unit}`);
-              if (sensor.criticalLow != null)  parts.push(`🔴 Crit Low ${sensor.criticalLow}${unit}`);
-              if (sensor.criticalHigh != null) parts.push(`🔴 Crit High ${sensor.criticalHigh}${unit}`);
-              return [parts.join("  ·  "), label];
+              // Convert timestamp to band fraction for control/motion lookup
+              const rangeMs = RANGE_MS[range];
+              const windowStart = Date.now() - rangeMs;
+              const tFrac = (ts - windowStart) / rangeMs;
+
+              // Determine which controls are ON at this timestamp
+              const activeControls = controlMeta.filter(({ ctrl }) => {
+                const bands = controlBandsRaw.get(ctrl.id) ?? [];
+                return bands.some(b => tFrac >= b.x1 && tFrac <= b.x2);
+              });
+              const inactiveControls = controlMeta.filter(({ ctrl }) => {
+                const bands = controlBandsRaw.get(ctrl.id) ?? [];
+                return !bands.some(b => tFrac >= b.x1 && tFrac <= b.x2);
+              });
+
+              // Find motion snapshot at this timestamp (if any)
+              let motionSnap: { url: string; label: string; frameCount: number } | null = null;
+              for (const [, { label: camLabel, bands }] of motionData) {
+                for (const band of bands) {
+                  if (tFrac >= band.x1 && tFrac <= band.x2 && band.snapshots.length > 0) {
+                    motionSnap = { url: band.snapshots[0], label: camLabel, frameCount: band.snapshots.length };
+                    break;
+                  }
+                }
+                if (motionSnap) break;
+              }
+
+              return (
+                <div
+                  style={{
+                    background: "rgba(0,0,0,0.9)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    borderRadius: 12,
+                    padding: "8px 10px",
+                    minWidth: 140,
+                    maxWidth: 200,
+                  }}
+                >
+                  {/* Timestamp */}
+                  <div style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", marginBottom: 4, fontWeight: 600 }}>
+                    {formatTime(ts)}
+                  </div>
+
+                  {/* Sensor values */}
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  {payload.map((entry: any) => {
+                    const sensor = numericSensors.find((s) => s.id === String(entry.name));
+                    const unit = sensor?.displayUnit === "F" ? "°F" : sensor?.unit ?? "";
+                    return (
+                      <div key={entry.name} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                        <span style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: entry.color, flexShrink: 0 }} />
+                        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", flex: 1 }}>
+                          {sensor?.label ?? entry.name}
+                        </span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.8)" }}>
+                          {Number(entry.value).toFixed(1)}{unit}
+                        </span>
+                      </div>
+                    );
+                  })}
+
+                  {/* Control states */}
+                  {controlMeta.length > 0 && (
+                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginTop: 4, paddingTop: 4 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                        {activeControls.map(({ ctrl, color, Icon }) => (
+                          <span
+                            key={ctrl.id}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: 3,
+                              fontSize: 8, fontWeight: 700,
+                              color, backgroundColor: `${color}15`,
+                              padding: "2px 5px", borderRadius: 4,
+                              textTransform: "uppercase", letterSpacing: "0.04em",
+                            }}
+                          >
+                            <Icon style={{ width: 8, height: 8 }} /> {ctrl.label} ON
+                          </span>
+                        ))}
+                        {inactiveControls.map(({ ctrl, Icon }) => (
+                          <span
+                            key={ctrl.id}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: 3,
+                              fontSize: 8, fontWeight: 600,
+                              color: "rgba(255,255,255,0.15)",
+                              padding: "2px 5px", borderRadius: 4,
+                              textTransform: "uppercase", letterSpacing: "0.04em",
+                            }}
+                          >
+                            <Icon style={{ width: 8, height: 8 }} /> {ctrl.label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Motion snapshot thumbnail */}
+                  {motionSnap && (
+                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginTop: 4, paddingTop: 4 }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={motionSnap.url}
+                        alt="Motion"
+                        style={{ width: "100%", height: 72, objectFit: "cover", borderRadius: 6 }}
+                      />
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+                        <span style={{ fontSize: 7, color: "rgba(255,255,255,0.25)" }}>{motionSnap.label}</span>
+                        <span style={{ fontSize: 7, color: "rgba(244,63,94,0.6)" }}>{motionSnap.frameCount} frames</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
             }}
           />
           {enabledSensors.map((s) => {
@@ -646,11 +741,19 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
                           backgroundColor: "#f43f5e",
                           opacity: hoveredMotion?.cameraId === camId && hoveredMotion?.bandIdx === i ? 0.8 : 0.4,
                         }}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setHoveredMotion({ cameraId: camId, bandIdx: i, x: rect.left + rect.width / 2, y: rect.top });
+                        onMouseEnter={() => {
+                          setHoveredMotion({ cameraId: camId, bandIdx: i, x: 0, y: 0 });
                         }}
                         onMouseLeave={() => setHoveredMotion(null)}
+                        onClick={(e) => {
+                          // Toggle on tap (touch devices)
+                          e.stopPropagation();
+                          setHoveredMotion((prev) =>
+                            prev?.cameraId === camId && prev?.bandIdx === i
+                              ? null
+                              : { cameraId: camId, bandIdx: i, x: 0, y: 0 }
+                          );
+                        }}
                       >
                         {(band.x2 - band.x1) > 0.03 && (
                           <div className="absolute inset-0 flex items-center justify-center">
@@ -672,19 +775,25 @@ export function SensorHistory({ sensors, controls = [], defaultExpanded }: Senso
                 </div>
               ))}
 
-              {/* Hover thumbnail popup */}
+              {/* Hover/tap thumbnail popup — positioned using band center % */}
               {hoveredMotion && (() => {
                 const camData = motionData.get(hoveredMotion.cameraId);
                 const band = camData?.bands[hoveredMotion.bandIdx];
                 if (!band || band.snapshots.length === 0) return null;
-                // Show first snapshot as preview thumbnail
                 const previewUrl = band.snapshots[0];
                 const time = new Date(band.startTs);
                 const timeStr = `${time.getHours()}:${String(time.getMinutes()).padStart(2, "0")}:${String(time.getSeconds()).padStart(2, "0")}`;
+                // Center the popup on the band's horizontal midpoint
+                const bandCenterPct = ((band.x1 + band.x2) / 2) * 100;
                 return (
                   <div
-                    className="absolute z-50 -top-36 left-1/2 -translate-x-1/2 pointer-events-none"
-                    style={{ left: hoveredMotion.x }}
+                    className="absolute z-50 pointer-events-none"
+                    style={{
+                      left: `${bandCenterPct}%`,
+                      bottom: "100%",
+                      transform: "translateX(-50%)",
+                      marginBottom: 4,
+                    }}
                   >
                     <div className="bg-black/90 backdrop-blur-sm rounded-lg border border-white/10 p-1.5 shadow-xl">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
