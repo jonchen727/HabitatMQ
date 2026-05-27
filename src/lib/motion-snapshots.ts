@@ -170,18 +170,45 @@ async function captureFrame(camera: CameraDef, session: CaptureSession): Promise
 }
 
 /**
- * Grab a single JPEG frame from an MJPEG stream.
- * Same logic as the snapshot API route but extracted for reuse.
+ * Grab a single JPEG frame from a camera.
+ *
+ * Strategy:
+ *  1. go2rtc frame API — works for RTSP streams (go2rtc is already decoding)
+ *  2. Direct HTTP/MJPEG fetch — fallback for non-go2rtc cameras
  */
 async function grabMjpegFrame(camera: CameraDef): Promise<Buffer | null> {
-  if (!camera.url) return null;
+  // ── Try go2rtc first (handles RTSP streams) ──
+  try {
+    const go2rtcHost = process.env.GO2RTC_HOST ?? "localhost";
+    const go2rtcPort = process.env.GO2RTC_PORT ?? "1984";
+    // go2rtc stream name = sanitized camera ID (same as go2rtc.ts streamName)
+    const streamName = camera.id.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const go2rtcUrl = `http://${go2rtcHost}:${go2rtcPort}/api/frame.jpeg?src=${encodeURIComponent(streamName)}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(go2rtcUrl, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("image/jpeg") || contentType.includes("image/png")) {
+        return Buffer.from(await res.arrayBuffer());
+      }
+    }
+  } catch {
+    // go2rtc not available or stream not registered — fall through
+  }
+
+  // ── Fallback: direct HTTP/MJPEG fetch ──
+  if (!camera.url || camera.url.startsWith("rtsp://")) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
     const upstream = await fetch(camera.url, { signal: controller.signal });
-    if (!upstream.ok) return null;
+    if (!upstream.ok) { clearTimeout(timeout); return null; }
 
     const contentType = upstream.headers.get("content-type") || "";
 
