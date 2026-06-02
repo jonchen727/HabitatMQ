@@ -6,6 +6,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Ca
 
 ---
 
+## [2026.06.0] — 2026-06-02
+
+### Added
+- **Motion detection timeline** — Real-time motion event strip on the sensor history chart with 1fps screenshot capture from ONVIF cameras. Tap a motion band to see the captured frame.
+- **Enriched chart tooltips** — Sensor history tooltips now show which controls are on/off at the hovered timestamp, plus a motion snapshot thumbnail when motion was active.
+- **Per-event weight assessment** — Measurement cards in the care log now show individual growth percentile callouts based on the animal's weight and age at the time of that specific measurement.
+- **Daily temperature extremes** — Care page shows a hot/cold side daily high ↑ / low ↓ / avg strip for each selected day, making it easy to spot overnight temperature drops.
+- **Observation events** — Feeding observation (lump status, regurgitation), behavior observation (temperament), and medical observation categories with automatic linkage to recent feedings.
+
+### Performance
+- **Sensor history overhaul** — Write throttling (1 write/5s per sensor), batch API (`/api/history/batch`), hourly rollup tables, in-memory LRU cache, and daily extremes endpoint. Chart loads 3–5× faster on 7-day views.
+- **Care page optimization** — Parallel fetch of events + stats + extremes eliminates the loading waterfall. Server-side response caching reduces API latency.
+
+### Fixed
+- Care page temperatures now display in °F (was showing raw °C from the sensor).
+- 0°C sensor glitch readings (disconnected probe) filtered out of daily extremes.
+- 7-day chart falls back to rollup data when raw per-minute data is sparse.
+- Control status strip shows correct state for controls that were ON for the entire visible time range.
+- Motion snapshot popup positioning fixed for touch devices (was clipped off-screen).
+- Motion snapshot capture uses go2rtc frame API instead of direct RTSP for reliability.
+- Merged raw + rollup sensor tables via UNION ALL for seamless time-range queries.
+
+---
+
 ## [2026.05.3] — 2026-05-18
 
 ### Fixed

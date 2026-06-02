@@ -80,6 +80,21 @@ Tap the ⚙ icon to open the PID tuning sheet:
 | **Max duty** | Maximum PWM output (safety cap) |
 | **Window** | PID calculation window in seconds |
 
+### PID Setpoint Schedule
+
+Heating devices support **day/night setpoint scheduling** — the setpoint changes automatically throughout the day to mimic natural thermal cycles.
+
+The schedule editor shows a visual timeline with temperature (Y-axis) and time (X-axis). Drag to create setpoint segments:
+
+| Schedule type | Behavior |
+|---------------|---------|
+| **Daily** | Fixed time-of-day setpoints (e.g. 88°F at 8am, 78°F at 10pm) |
+| **Solar** | Anchored to sunrise/sunset times from your configured location |
+| **Seasonal** | Adjusts by month for species that need seasonal temperature variation |
+| **Brumation** | Override profile for cooling periods |
+
+**Priority order:** Brumation > Seasonal > Solar > Daily > Static setpoint. When no schedule is active or the schedule is disabled, the static setpoint is used as fallback.
+
 ---
 
 ## Runtime Stats

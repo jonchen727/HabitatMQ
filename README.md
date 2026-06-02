@@ -72,13 +72,14 @@ Open [http://localhost:3003](http://localhost:3003). The SQLite database is crea
 ## Features
 
 | Feature | Details |
-|---------|---------|
+|---------|---------| 
 | 🌡️ **Live sensor dashboard** | Real-time temperature & humidity gauges with color-coded status |
-| 📈 **Sensor history** | 1H / 6H / 24H / 7D charts with threshold reference lines |
-| 🎛️ **Device controls** | On/Off/Auto modes, solar schedule (sunrise/sunset), PID setpoint |
-| 📅 **Care log** | Calendar view with per-animal feeding, shedding, handling, observation events |
-| 🐍 **Inhabitant profiles** | Reptile and aquarium types, weight tracking, growth percentile |
+| 📈 **Sensor history** | 1H / 6H / 24H / 7D charts with rollup tables, threshold lines, and enriched tooltips showing control states + motion snapshots |
+| 🎛️ **Device controls** | On/Off/Auto modes, solar schedule (sunrise/sunset), PID setpoint with day/night scheduling |
+| 📅 **Care log** | Calendar view with per-animal feeding, shedding, handling, observation events and daily temperature extremes |
+| 🐍 **Inhabitant profiles** | Reptile and aquarium types, weight tracking, growth percentile, life stage detection |
 | 📷 **Camera streaming** | Zero-transcode RTSP via go2rtc, ONVIF auto-discovery, motion detection |
+| 👁 **Motion timeline** | Motion detection events overlaid on sensor history with 1fps snapshot capture and hover filmstrip |
 | 📸 **Photo log** | Attach photos to care events with auto-compression and full-screen lightbox |
 | 🔔 **Alerts** | Configurable warning/critical thresholds with alert history |
 | 📡 **MQTT telemetry** | Standard MQTT broker — works with ESPHome, Tasmota, custom sensors |
