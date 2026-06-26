@@ -336,7 +336,7 @@ export type PaneDef = z.infer<typeof PaneDefSchema>;
 // ─── MQTT Broker Config ──────────────────────────────────────────────────────
 
 export const MqttConfigSchema = z.object({
-  host: z.string().default("snekpi"),
+  host: z.string().default("localhost"),
   port: z.number().int().default(1880),
   protocol: z.enum(["ws", "wss"]).default("ws"),
   username: z.string().optional(),

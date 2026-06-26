@@ -396,7 +396,7 @@ export function deleteCamera(id: string): boolean {
 // ─── MQTT Config (singleton) ─────────────────────────────────────────────────
 
 const DEFAULT_MQTT: MqttConfig = {
-  host: "snekpi",
+  host: "localhost",
   port: 9001,
   protocol: "ws",
 };

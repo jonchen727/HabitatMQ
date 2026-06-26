@@ -23,13 +23,19 @@ HabitatMQ is a mobile-first dashboard that puts real-time sensor data, animal pr
   </tr>
   <tr>
     <td align="center"><b>Care Log</b></td>
-    <td align="center"><b>Inhabitants</b></td>
+    <td align="center"><b>Tank</b></td>
     <td align="center"><b>Config</b></td>
   </tr>
   <tr>
     <td><img src="public/screenshots/care.png" width="220"/></td>
     <td><img src="public/screenshots/inhabitants.png" width="220"/></td>
     <td><img src="public/screenshots/config.png" width="220"/></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Alerts</b></td>
+  </tr>
+  <tr>
+    <td><img src="public/screenshots/alerts.png" width="220"/></td>
   </tr>
 </table>
 

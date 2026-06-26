@@ -16,7 +16,7 @@ interface MqttSettingsProps {
 }
 
 export function MqttSettings({ config, onSave }: MqttSettingsProps) {
-  const [host, setHost] = useState("snekpi");
+  const [host, setHost] = useState("localhost");
   const [port, setPort] = useState("1880");
   const [protocol, setProtocol] = useState<"ws" | "wss">("ws");
   const [username, setUsername] = useState("");

@@ -7,8 +7,8 @@
  * accessible through Cloudflare Tunnel without exposing port 1984.
  *
  * Architecture:
- *   Browser → wss://snek.lattenet.com/api/streams/go2rtc/ws?src=cam-xxx
- *          → CF Tunnel → snekpi:3003 (this server)
+ *   Browser → wss://your-domain.com/api/streams/go2rtc/ws?src=cam-xxx
+ *          → CF Tunnel → your-host:3003 (this server)
  *          → Raw TCP proxy → localhost:1984/api/ws?src=cam-xxx (go2rtc)
  *
  * Usage:

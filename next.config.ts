@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["snekpi", "snekpi.local", "192.168.1.94"],
+  // Add your device hostname/IP here for dev access, e.g. ["mypi", "mypi.local", "192.168.1.x"]
+  allowedDevOrigins: ["localhost"],
   serverExternalPackages: ["better-sqlite3", "onvif"],
   experimental: {
     useLightningcss: true,
